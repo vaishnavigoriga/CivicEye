@@ -1,5 +1,5 @@
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { LandingPage } from '../pages/LandingPage';
 import { ExploreComplaintsPage } from '../pages/ExploreComplaintsPage';
@@ -21,17 +21,18 @@ import { Loader2 } from 'lucide-react';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, loading } = useAuth();
+  const location = useLocation();
 
   if (loading) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-blue-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-civic-700" />
       </div>
     );
   }
 
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
   return <>{children}</>;
@@ -43,7 +44,7 @@ const AdminRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   if (loading) {
     return (
       <div className="min-h-[70vh] flex items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-purple-600" />
+        <Loader2 className="w-8 h-8 animate-spin text-civic-700" />
       </div>
     );
   }
@@ -67,6 +68,7 @@ export const AppRouter: React.FC = () => {
       <Route path="/register" element={<RegisterPage />} />
       <Route path="/map" element={<MapPage />} />
       <Route path="/analytics" element={<AnalyticsPage />} />
+      <Route path="/track/:id" element={<ComplaintDetailPage />} />
       <Route path="/citizen/complaints/:id" element={<ComplaintDetailPage />} />
 
       {/* Citizen Protected Routes */}

@@ -1,29 +1,28 @@
 import { Router } from 'express';
-import { AdminController } from '../controllers/adminController';
+import * as a from '../controllers/adminController';
 import { authenticate, requireRole } from '../middleware/authMiddleware';
-import { upload } from '../middleware/uploadMiddleware';
+import { uploadSingle } from '../middleware/uploadMiddleware';
+import { validate } from '../utils/errors';
 
 const router = Router();
 
-// Router-level protection: All admin routes strictly require valid JWT and 'admin' role
+// Every admin route requires a valid session AND the admin role (re-checked against the database).
 router.use(authenticate, requireRole('admin'));
 
-/**
- * EXACT ROUTE REGISTRATION ORDER: Static before dynamic
- */
-router.get('/kpis', AdminController.getKPIs);
-router.get('/audit', AdminController.getAuditLog);
-router.get('/complaints', AdminController.getAllComplaints);
-router.get('/duplicates', AdminController.getDuplicateGroups);
-router.get('/departments', AdminController.getDepartments);
-router.post('/departments', AdminController.createDepartment);
-router.put('/departments/:id', AdminController.updateDepartment);
+router.get('/complaints', validate(a.adminListSchema, 'query'), a.list);
+router.get('/complaints/:trackingId', a.getOne);
+router.patch('/complaints/:trackingId/status', validate(a.statusSchema), a.updateStatus);
+router.patch('/complaints/:trackingId/department', validate(a.assignSchema), a.assign);
+router.patch('/complaints/:trackingId/category', validate(a.verifySchema), a.verifyCategory);
+router.post('/complaints/:trackingId/comments', validate(a.commentSchema), a.addComment);
+router.post('/complaints/:trackingId/evidence', uploadSingle('evidence'), validate(a.evidenceSchema), a.uploadEvidence);
 
-// Dynamic routes
-router.get('/complaints/:id', AdminController.getAllComplaints); // or single complaint if needed
-router.patch('/complaints/:id/status', AdminController.updateStatus);
-router.patch('/complaints/:id/department', AdminController.assignDepartment);
-router.post('/complaints/:id/evidence', upload.single('evidence'), AdminController.uploadEvidence);
-router.patch('/complaints/:id/duplicate', AdminController.reviewDuplicate);
+router.get('/duplicates', a.listDuplicates);
+router.patch('/duplicates/:id', validate(a.duplicateReviewSchema), a.reviewDuplicate);
+
+router.get('/workload', a.workload);
+router.get('/departments', a.listDepartments);
+router.post('/departments', validate(a.departmentSchema), a.createDepartment);
+router.put('/departments/:id', validate(a.departmentSchema), a.updateDepartment);
 
 export default router;

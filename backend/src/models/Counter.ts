@@ -1,22 +1,19 @@
-import mongoose, { Document, Schema } from 'mongoose';
+import mongoose, { Schema } from 'mongoose';
 
-export interface ICounter extends Document {
+interface ICounter {
   _id: string;
   seq: number;
 }
 
-const counterSchema = new Schema<ICounter>({
+const schema = new Schema<ICounter>({
   _id: { type: String, required: true },
   seq: { type: Number, default: 0 },
 });
 
-export const Counter = mongoose.model<ICounter>('Counter', counterSchema);
+export const Counter = mongoose.model<ICounter>('Counter', schema);
 
-export async function getNextSequence(sequenceName: string): Promise<number> {
-  const counter = await Counter.findByIdAndUpdate(
-    sequenceName,
-    { $inc: { seq: 1 } },
-    { new: true, upsert: true }
-  );
-  return counter.seq;
+/** Atomic, gap-tolerant sequence generator (used for tracking IDs). */
+export async function getNextSequence(name: string): Promise<number> {
+  const counter = await Counter.findByIdAndUpdate(name, { $inc: { seq: 1 } }, { new: true, upsert: true });
+  return counter!.seq;
 }

@@ -4,106 +4,95 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import path from 'path';
+import mongoose from 'mongoose';
 import { ENV } from './config/env';
 import { connectDB } from './config/db';
 import { logger } from './utils/logger';
 import { errorHandler, notFoundHandler } from './middleware/errorMiddleware';
-import { seedDatabase } from './services/seedService';
-import { User } from './models/User';
+import { generalLimiter } from './middleware/rateLimit';
+import { AIService } from './services/aiService';
+import { bootstrapAdmin, ensureDepartments, seedDemoData } from './services/seedService';
+import { UPLOAD_ROOT } from './services/storageService';
 
-// Routers
 import authRoutes from './routes/authRoutes';
 import transcriptionRoutes from './routes/transcriptionRoutes';
 import complaintRoutes from './routes/complaintRoutes';
 import adminRoutes from './routes/adminRoutes';
+import mediaRoutes from './routes/mediaRoutes';
+import { dataSources } from './controllers/complaintController';
 
 export const app = express();
 
-// Security & utility middleware
-app.use(
-  helmet({
-    crossOriginResourcePolicy: { policy: 'cross-origin' }, // allow serving uploaded images
-  })
-);
+if (ENV.TRUST_PROXY) app.set('trust proxy', 1);
+app.disable('x-powered-by');
 
+app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
+
+// Strict CORS: only the configured frontend origin may make credentialed requests.
+const allowedOrigins = new Set([ENV.FRONTEND_URL]);
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, or server-to-server)
-      if (!origin) return callback(null, true);
-      const allowedOrigins = [ENV.FRONTEND_URL, 'http://localhost:5173', 'http://127.0.0.1:5173'];
-      if (allowedOrigins.includes(origin) || origin.endsWith('.local')) {
-        return callback(null, true);
-      }
-      return callback(null, true); // Permissive in dev mode for smooth demo evaluation
-    },
+    origin: (origin, cb) => cb(null, !origin || allowedOrigins.has(origin)),
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    allowedHeaders: ['Content-Type'],
+  }),
 );
 
 app.use(cookieParser());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(express.json({ limit: '100kb' }));
+if (ENV.NODE_ENV === 'development') app.use(morgan('dev'));
 
-if (ENV.NODE_ENV !== 'test') {
-  app.use(morgan('dev'));
-}
+// Only images and resolution evidence are public. Voice recordings live in a private folder.
+const staticOpts = { index: false, dotfiles: 'deny' as const };
+app.use('/uploads/images', express.static(path.join(UPLOAD_ROOT, 'images'), staticOpts));
+app.use('/uploads/evidence', express.static(path.join(UPLOAD_ROOT, 'evidence'), staticOpts));
 
-// Serve uploaded static files
-const uploadsPath = path.resolve(__dirname, '../uploads');
-app.use('/uploads', express.static(uploadsPath));
-
-// Health check endpoint
-app.get('/api/health', (req: Request, res: Response) => {
+const health = (_req: Request, res: Response) => {
   res.json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    service: 'CivicEye Backend API',
-    aiEngine: ENV.GEMINI_API_KEY ? 'Gemini 1.5 Flash' : 'Simulated Deterministic AI (Offline Mode)',
+    status: mongoose.connection.readyState === 1 ? 'healthy' : 'degraded',
+    service: 'CivicEye API',
     version: '1.0.0',
+    timestamp: new Date().toISOString(),
+    database: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    // Configuration only. Whether a given analysis was live is recorded on each report (ai.status / ai.isSimulated).
+    ai: {
+      geminiKeyConfigured: AIService.isConfigured(),
+      analysisMode: AIService.isConfigured() ? 'gemini' : 'simulated-keyword-rules',
+      models: AIService.isConfigured() ? { analysis: ENV.GEMINI_MODEL, transcription: ENV.GEMINI_TRANSCRIBE_MODEL, speech: ENV.GEMINI_TTS_MODEL } : undefined,
+      simulatedFallbackOnFailure: ENV.AI_DEMO_FALLBACK,
+    },
   });
-});
+};
+app.get('/api/health', health);
 
-// Mount modular API routers
-app.use('/api/auth', authRoutes);
-app.use('/api/transcription', transcriptionRoutes);
-app.use('/api/complaints', complaintRoutes);
-app.use('/api/admin', adminRoutes);
+const api = express.Router();
+api.get('/health', health);
+api.use('/auth', authRoutes);
+api.use('/voice', transcriptionRoutes);
+api.use('/complaints', complaintRoutes);
+api.use('/admin', adminRoutes);
+api.use('/media', mediaRoutes);
+api.get('/data-sources', dataSources);
+app.use('/api/v1', generalLimiter, api);
 
-// Error handlers
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// Start server function
 export const startServer = async () => {
-  try {
-    await connectDB();
+  await connectDB();
+  await ensureDepartments();
+  await bootstrapAdmin();
+  if (ENV.SEED_DEMO_DATA) await seedDemoData();
 
-    // Auto-seed if database is empty for seamless zero-setup demo experience
-    const userCount = await User.countDocuments();
-    if (userCount === 0) {
-      logger.info('Empty database detected. Auto-seeding initial demo data...');
-      await seedDatabase();
-    }
-
-    if (ENV.NODE_ENV !== 'test') {
-      app.listen(ENV.PORT, () => {
-        logger.info(`=======================================================`);
-        logger.info(` CivicEye API Server running on port ${ENV.PORT}`);
-        logger.info(` Mode: ${ENV.NODE_ENV}`);
-        logger.info(` AI Status: ${ENV.GEMINI_API_KEY ? 'Gemini 1.5 Flash (Online)' : 'Deterministic Simulated AI (Turnkey Demo Mode)'}`);
-        logger.info(` Healthcheck: http://localhost:${ENV.PORT}/api/health`);
-        logger.info(`=======================================================`);
-      });
-    }
-  } catch (error: any) {
-    logger.error('Failed to start server:', error);
-    process.exit(1);
-  }
+  app.listen(ENV.PORT, () => {
+    logger.info(`CivicEye API listening on http://localhost:${ENV.PORT} (${ENV.NODE_ENV})`);
+  });
 };
 
 if (require.main === module) {
-  startServer();
+  startServer().catch((err) => {
+    logger.error('Failed to start server:', err);
+    process.exit(1);
+  });
 }

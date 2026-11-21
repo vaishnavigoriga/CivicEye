@@ -20,11 +20,11 @@ export const Button: React.FC<ButtonProps> = ({
   ...props
 }) => {
   const baseClasses =
-    'inline-flex items-center justify-center font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-civic-700 disabled:opacity-60 disabled:cursor-not-allowed select-none';
+    'inline-flex items-center justify-center font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed select-none';
 
   const variants = {
-    primary: 'bg-civic-900 hover:bg-civic-850 text-white shadow-xs border border-civic-950',
-    secondary: 'bg-civic-700 hover:bg-civic-600 text-white shadow-xs border border-transparent',
+    primary: 'bg-civic-700 hover:bg-civic-800 text-white border border-civic-700',
+    secondary: 'bg-civic-50 hover:bg-civic-100 text-civic-900 border border-civic-100',
     outline: 'bg-white hover:bg-slate-50 text-slate-800 border border-slate-300 shadow-xs hover:border-slate-400',
     ghost: 'bg-transparent hover:bg-slate-100 text-slate-700',
     danger: 'bg-rose-700 hover:bg-rose-800 text-white shadow-xs border border-rose-800',

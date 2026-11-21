@@ -5,9 +5,8 @@ import { authApi } from '../api/authApi';
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  login: (credentials: { email: string; password: string }) => Promise<void>;
-  demoLogin: (role: 'citizen' | 'admin') => Promise<void>;
-  register: (data: any) => Promise<void>;
+  login: (credentials: { email: string; password: string }) => Promise<User>;
+  register: (data: any) => Promise<User>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
 }
@@ -36,16 +35,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const login = async (credentials: { email: string; password: string }) => {
     const res = await authApi.login(credentials);
     setUser(res.user);
-  };
-
-  const demoLogin = async (role: 'citizen' | 'admin') => {
-    const res = await authApi.demoLogin(role);
-    setUser(res.user);
+    return res.user;
   };
 
   const register = async (data: any) => {
     const res = await authApi.register(data);
     setUser(res.user);
+    return res.user;
   };
 
   const logout = async () => {
@@ -54,7 +50,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, demoLogin, register, logout, refreshUser }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

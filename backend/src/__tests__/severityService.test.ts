@@ -1,52 +1,63 @@
-import { SeverityService } from '../services/severityService';
+import { calculateScore, bandFor } from '../services/scoringService';
 
-describe('SeverityService (Transparent Multi-Factor Scoring)', () => {
-  it('should calculate priority score accurately for critical water hazard', () => {
-    // Water Supply is high-risk (safetyRisk = 100)
-    const result = SeverityService.calculatePriority(
-      9, // raw AI rating
-      'Water Supply',
-      12, // 12 upvotes
-      new Date(Date.now() - 10 * 24 * 60 * 60 * 1000) // 10 days unresolved
-    );
+const base = {
+  category: 'Roads' as const,
+  hasImage: false,
+  supportCount: 0,
+  createdAt: new Date('2026-01-01T00:00:00Z'),
+  now: new Date('2026-01-01T00:00:00Z'),
+};
 
-    expect(result.priorityScore).toBeGreaterThanOrEqual(70);
-    expect(result.priorityScore).toBeLessThanOrEqual(100);
-    expect(result.factors.safetyRisk).toBe(100);
-    expect(result.factors.populationImpact).toBe(60); // 12 * 5
-    expect(result.factors.durationImpact).toBe(20); // 10 * 2
-    expect(result.band).toMatch(/High|Critical/);
+describe('scoringService (prototype model)', () => {
+  it('score stays within 1-100 and factors within 0-1', () => {
+    const max = calculateScore({
+      ...base,
+      safetyRisk: 'critical',
+      affectedPopulation: 'ward',
+      infrastructureDamage: 'collapsed',
+      hasImage: true,
+      supportCount: 50,
+      now: new Date('2027-01-01'),
+    });
+    const min = calculateScore({ ...base, category: 'Other', safetyRisk: 'low', affectedPopulation: 'individual', infrastructureDamage: 'cosmetic' });
+    expect(max.total).toBeLessThanOrEqual(100);
+    expect(min.total).toBeGreaterThanOrEqual(1);
+    for (const v of Object.values(max.factors)) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
   });
 
-  it('should NEVER penalize older complaints (prolonged duration increases priority)', () => {
-    const complaintNew = SeverityService.calculatePriority(
-      5,
-      'Roads',
-      2,
-      new Date() // Today
-    );
-
-    const complaintOld = SeverityService.calculatePriority(
-      5,
-      'Roads',
-      2,
-      new Date(Date.now() - 25 * 24 * 60 * 60 * 1000) // 25 days unresolved
-    );
-
-    // Older complaint with same parameters MUST have equal or higher priority score
-    expect(complaintOld.priorityScore).toBeGreaterThanOrEqual(complaintNew.priorityScore);
+  it('is monotonic in each input', () => {
+    const lowRisk = calculateScore({ ...base, category: 'Other', safetyRisk: 'low' }).total;
+    const highRisk = calculateScore({ ...base, category: 'Other', safetyRisk: 'critical' }).total;
+    expect(highRisk).toBeGreaterThan(lowRisk);
+    const noSupport = calculateScore(base).total;
+    expect(calculateScore({ ...base, supportCount: 6 }).total).toBeGreaterThan(noSupport);
+    expect(calculateScore({ ...base, hasImage: true }).total).toBeGreaterThan(noSupport);
   });
 
-  it('should clamp scores strictly within [1, 100]', () => {
-    const minResult = SeverityService.calculatePriority(1, 'Parks', 0, new Date());
-    const maxResult = SeverityService.calculatePriority(10, 'Electricity', 50, new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
-
-    expect(minResult.priorityScore).toBeGreaterThanOrEqual(1);
-    expect(maxResult.priorityScore).toBeLessThanOrEqual(100);
+  it('duration raises the score while open and stops once closed', () => {
+    const fresh = calculateScore(base).total;
+    const old = calculateScore({ ...base, now: new Date('2026-02-01T00:00:00Z') }).total;
+    expect(old).toBeGreaterThan(fresh);
+    const closed = calculateScore({ ...base, closedAt: new Date('2026-01-01T00:00:00Z'), now: new Date('2026-06-01T00:00:00Z') }).total;
+    expect(closed).toBe(fresh);
   });
 
-  it('should include transparent prototype disclaimer', () => {
-    const result = SeverityService.calculatePriority(6, 'Roads');
-    expect(result.disclaimer).toContain('Prototype estimate');
+  it('hazardous categories have a safety floor', () => {
+    expect(calculateScore({ ...base, category: 'Electricity', safetyRisk: 'low' }).factors.safety).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it('weights are reported and sum to 1', () => {
+    const w = calculateScore(base).weights;
+    expect(w.safety + w.affected + w.evidence + w.duration).toBeCloseTo(1, 5);
+  });
+
+  it('bands use fixed thresholds', () => {
+    expect(bandFor(85)).toBe('Critical');
+    expect(bandFor(60)).toBe('High');
+    expect(bandFor(40)).toBe('Medium');
+    expect(bandFor(39)).toBe('Low');
   });
 });

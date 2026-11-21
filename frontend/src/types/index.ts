@@ -10,118 +10,74 @@ export interface User {
   phone?: string;
 }
 
-export type ComplaintCategory =
-  | 'Roads'
-  | 'Drainage'
-  | 'Electricity'
-  | 'Water Supply'
-  | 'Sanitation'
-  | 'Street Lights'
-  | 'Parks'
-  | 'Other';
+export const CATEGORIES = [
+  'Roads',
+  'Drainage',
+  'Waterlogging',
+  'Water Supply',
+  'Sanitation',
+  'Street Lights',
+  'Electricity',
+  'Public Infrastructure',
+  'Other',
+] as const;
+export type ComplaintCategory = (typeof CATEGORIES)[number];
 
-export type ComplaintStatus = 'pending' | 'assigned' | 'in-progress' | 'resolved' | 'rejected';
+export const STATUSES = ['submitted', 'under_review', 'assigned', 'in_progress', 'resolved', 'rejected'] as const;
+export type ComplaintStatus = (typeof STATUSES)[number];
 
-export type ComplaintDataSource = 'CITIZEN_SUBMITTED' | 'DEMO_SIMULATED' | 'VERIFIED_EXTERNAL';
+/** CITIZEN = submitted in this app, DEMO = fictional demonstration data, IMPORTED_OFFICIAL = verified external dataset. */
+export type Provenance = 'CITIZEN' | 'DEMO' | 'IMPORTED_OFFICIAL';
+export type PriorityBand = 'Critical' | 'High' | 'Medium' | 'Low';
 
-export interface ComplaintMedia {
-  type: 'image' | 'audio';
-  url: string;
-  mimeType: string;
-  uploadedAt: string;
-}
-
-export interface ComplaintTimeline {
-  status: ComplaintStatus;
-  note: string;
-  updatedBy: {
-    _id: string;
-    name: string;
-    role: string;
-  };
-  timestamp: string;
-}
-
-export interface ResolutionEvidence {
-  url: string;
-  caption: string;
-  uploadedAt: string;
-}
-
-export interface AISeverityFactors {
-  safetyRisk?: 'low' | 'medium' | 'high' | 'critical';
-  affectedPopulation?: 'individual' | 'street' | 'neighbourhood' | 'ward';
-  infrastructureDamage?: 'cosmetic' | 'moderate' | 'severe' | 'collapsed';
-  publicHealthRisk?: boolean;
-}
-
+/** Public view of a complaint as returned by the API. Never contains reporter identity. */
 export interface Complaint {
-  _id: string;
-  referenceId: string;
-  citizenId: {
-    _id: string;
-    name: string;
-    email: string;
-    preferredLanguage?: Language;
-  };
+  id: string;
+  trackingId: string;
+  provenance: Provenance;
   title: string;
   description: string;
   language: Language;
   category: ComplaintCategory;
+  categoryVerified: boolean;
   location: {
     address: string;
     area: string;
     ward?: string;
-    geo: {
-      type: 'Point';
-      coordinates: [number, number]; // [lng, lat]
-    };
+    accuracy: 'gps' | 'map_pin' | 'area_approx';
+    coordinates: [number, number]; // [lat, lng]
   };
-  media: ComplaintMedia[];
-  transcription?: {
-    originalAudioUrl?: string;
-    transcribedText?: string;
-    transcriptionSource: 'gemini' | 'unavailable';
-    language: Language;
-  };
-  aiAnalysis: {
-    category: ComplaintCategory;
-    aiSeverityRating: number;
-    priorityScore: number;
-    tags: string[];
-    summary: string;
-    detectedLanguage: Language;
+  images: { url: string }[];
+  audio?: { url: string }[]; // owner/admin only
+  hasAudio: boolean;
+  ai: {
+    status: 'ok' | 'fallback' | 'failed';
     isSimulated: boolean;
-    source: 'gemini' | 'mock';
-    department?: string;
-    severityFactors?: AISeverityFactors;
-    suggestedActions?: string[];
-    confidence?: number;
-    computedAt: string;
+    keywords: string[];
+    explanation?: string;
+    publicImpact?: string;
+    suggestedDepartment?: string;
+    suggestedCategory?: ComplaintCategory;
+    model?: string;
   };
-  duplicateGroupId?: string;
-  duplicateStatus: 'unreviewed' | 'confirmed' | 'rejected';
-  duplicateSimilarityScore?: number;
-  department?: {
-    _id: string;
-    name: string;
-    code: string;
-    contactEmail?: string;
-  };
+  priority: { score: number; band: PriorityBand; modelVersion: string };
   status: ComplaintStatus;
-  timeline: ComplaintTimeline[];
-  resolutionEvidence: ResolutionEvidence[];
-  upvotes: number;
-  hasUpvoted?: boolean;
-  dataSource: ComplaintDataSource;
-  externalSourceAttribution?: {
-    datasetName?: string;
-    sourceOrg?: string;
-    sourceUrl?: string;
-    licence?: string;
-  };
+  department: { code: string; name: string } | null;
+  supportCount: number;
+  hasSupported: boolean;
+  hasDuplicateGroup: boolean;
+  resolutionEvidence: { url: string; caption: string; uploadedAt: string }[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ComplaintUpdate {
+  type: string;
+  fromStatus?: string;
+  toStatus?: string;
+  note: string;
+  actorRole: 'citizen' | 'admin' | 'system';
+  createdAt: string;
 }
 
 export interface Department {
@@ -129,6 +85,61 @@ export interface Department {
   name: string;
   code: string;
   description: string;
-  contactEmail: string;
+  contactEmail?: string;
   assignedComplaintsCount?: number;
+}
+
+export interface DuplicateCandidate {
+  complaint: Complaint;
+  distanceMetres: number;
+  similarity: number;
+  isOwn?: boolean;
+}
+
+export interface MapPoint {
+  id: string;
+  trackingId: string;
+  title: string;
+  category: ComplaintCategory;
+  status: ComplaintStatus;
+  priority: { score: number; band: PriorityBand };
+  area: string;
+  accuracy: 'gps' | 'map_pin' | 'area_approx';
+  provenance: Provenance;
+  lat: number;
+  lng: number;
+}
+
+export interface Analytics {
+  scope: 'citizen' | 'all';
+  totals: { total: number; open: number; submitted: number; underReview: number; assigned: number; inProgress: number; resolved: number; rejected: number };
+  byStatus: { status: ComplaintStatus; count: number }[];
+  byCategory: { category: ComplaintCategory; count: number }[];
+  byArea: { area: string; count: number }[];
+  byPriority: { band: PriorityBand; count: number }[];
+  trend: { date: string; count: number }[];
+  byDepartment: { code: string; name: string; total: number; open: number }[];
+  availableAreas: string[];
+  composition: { citizen: number; demo: number; importedOfficial: number };
+  generatedAt: string;
+}
+
+export interface OfficialDataset {
+  id: string;
+  title: string;
+  sourceOrg: string;
+  sourceUrl: string;
+  licence: string;
+  retrievedAt: string;
+  publishedAt?: string;
+  coverage: string;
+  notes?: string;
+  rows: { label: string; metrics: Record<string, number> }[];
+}
+
+export interface DataSources {
+  composition: { citizen: number; demo: number; importedOfficial: number };
+  officialComplaintDataAvailable: boolean;
+  datasets: OfficialDataset[];
+  researchedOn: string;
 }

@@ -1,516 +1,286 @@
 import { Request, Response } from 'express';
-import fs from 'fs';
-import mongoose from 'mongoose';
-import { Complaint, ComplaintCategory, IComplaintMedia, ComplaintDataSource } from '../models/Complaint';
-import { Counter, getNextSequence } from '../models/Counter';
+import { ENV } from '../config/env';
+import { z } from 'zod';
+import { Complaint, CATEGORIES, STATUSES, IComplaint } from '../models/Complaint';
+import { ComplaintUpdate } from '../models/ComplaintUpdate';
+import { DuplicateGroup } from '../models/DuplicateGroup';
+import { Support } from '../models/Support';
+import { getNextSequence } from '../models/Counter';
 import { AIService } from '../services/aiService';
-import { SeverityService } from '../services/severityService';
-import { DuplicateService } from '../services/duplicateService';
+import { calculateScore } from '../services/scoringService';
+import { findCandidates, linkToGroup } from '../services/duplicateService';
 import { StorageService } from '../services/storageService';
-import { sendSuccess, sendError } from '../utils/responseHelper';
-import { logger } from '../utils/logger';
+import { computeAnalytics } from '../services/analyticsService';
+import { escapeRegex, rescore, trackingIdFor } from '../services/complaintService';
+import { hashText, translate } from '../services/speechService';
+import { approvedDatasets } from '../services/officialDataService';
+import { ownerComplaint, publicComplaint, publicUpdate } from '../services/serializers';
+import { AppError, asyncHandler } from '../utils/errors';
+import { isInHyderabad, nearestArea } from '../utils/geo';
+import { sendSuccess } from '../utils/responseHelper';
+import { getFile, validateUpload } from '../middleware/uploadMiddleware';
 
-export class ComplaintController {
-  /**
-   * Pre-submission image analysis using Gemini 1.5 Flash multimodal vision
-   */
-  static async analyzeImage(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.file) {
-        sendError(res, 'No image file uploaded for analysis', 400);
-        return;
-      }
+const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
-      const imageBuffer = fs.readFileSync(req.file.path);
-      const analysis = await AIService.analyzeImage(imageBuffer, req.file.mimetype, req.file.originalname);
+export const submitSchema = z.object({
+  description: z.string().trim().min(15, 'Describe the problem in at least 15 characters').max(2000),
+  title: z.string().trim().max(120).optional(),
+  category: z.enum(CATEGORIES).optional(),
+  latitude: z.coerce.number().min(-90).max(90),
+  longitude: z.coerce.number().min(-180).max(180),
+  locationAccuracy: z.enum(['gps', 'map_pin']).default('map_pin'),
+  area: z.string().trim().max(80).optional(),
+  address: z.string().trim().max(200).default(''),
+  language: z.enum(['en', 'te', 'hi']).default('en'),
+  transcriptText: z.string().trim().max(2000).optional(),
+  transcriptEditedByUser: bool.optional(),
+});
 
-      sendSuccess(res, analysis, 'Image analyzed successfully');
-    } catch (err: any) {
-      logger.error('Error analyzing image:', err);
-      sendError(res, err.message || 'Image analysis failed', 500);
-    }
+export const duplicateCheckSchema = z.object({
+  description: z.string().trim().min(10).max(2000),
+  latitude: z.coerce.number().min(-90).max(90),
+  longitude: z.coerce.number().min(-180).max(180),
+  category: z.enum(CATEGORIES).optional(),
+});
+
+export const listSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(12),
+  search: z.string().trim().max(80).optional(),
+  category: z.enum(CATEGORIES).optional(),
+  status: z.enum(STATUSES).optional(),
+  area: z.string().trim().max(80).optional(),
+  includeDemo: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+  sort: z.enum(['newest', 'priority']).default('newest'),
+});
+
+export const analyticsSchema = z.object({
+  scope: z.enum(['citizen', 'all']).default('citizen'),
+  category: z.enum(CATEGORIES).optional(),
+  status: z.enum(STATUSES).optional(),
+  area: z.string().trim().max(80).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+
+const mapSchema = z.object({
+  category: z.enum(CATEGORIES).optional(),
+  status: z.enum(STATUSES).optional(),
+  includeDemo: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
+});
+export { mapSchema };
+
+const findByTrackingId = async (trackingId: string) => {
+  const c = await Complaint.findOne({ trackingId: trackingId.toUpperCase() }).populate('departmentId', 'code name');
+  if (!c) throw new AppError(404, 'NOT_FOUND', 'No report found with that tracking ID.');
+  return c;
+};
+
+export const submit = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as z.infer<typeof submitSchema>;
+  const user = req.user!;
+
+  if (!isInHyderabad(body.latitude, body.longitude)) {
+    throw new AppError(400, 'LOCATION_OUTSIDE_REGION', 'The chosen location is outside the Greater Hyderabad region.', { latitude: 'Outside region' });
   }
 
-  /**
-   * Submit new complaint with text, image, voice, AI classification, severity scoring, and duplicate grouping
-   */
-  static async submitComplaint(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        sendError(res, 'Authentication required to submit complaint', 401);
-        return;
-      }
+  const image = validateUpload(getFile(req, 'image'), 'image');
+  const audio = validateUpload(getFile(req, 'audio'), 'audio');
 
-      const {
-        title,
-        description,
-        language = 'en',
-        address,
-        area,
-        ward,
-        latitude,
-        longitude,
-        transcribedText,
-        transcriptionSource,
-      } = req.body;
+  const ai = await AIService.analyze({ description: body.description, image: image ? { buffer: image.buffer, mime: image.detected.mime } : undefined });
+  // The citizen's own category choice wins; the AI suggestion is stored separately.
+  const category = body.category ?? ai.category;
 
-      if (!title || !description || !address || !area) {
-        sendError(res, 'Title, description, address, and area are required fields.', 400);
-        return;
-      }
+  const score = calculateScore({ category, ...ai.severityFactors, hasImage: !!image, supportCount: 0, createdAt: new Date() });
+  const candidates = await findCandidates({ lat: body.latitude, lng: body.longitude, description: body.description, category });
 
-      const lat = parseFloat(latitude || '17.3850');
-      const lng = parseFloat(longitude || '78.4867');
+  const media = [];
+  if (image) media.push({ kind: 'image' as const, ...StorageService.save(image.buffer, image.detected, 'images') });
+  if (audio) media.push({ kind: 'audio' as const, ...StorageService.save(audio.buffer, audio.detected, 'audio') });
 
-      if (isNaN(lat) || isNaN(lng)) {
-        sendError(res, 'Invalid geographical coordinates provided.', 400);
-        return;
-      }
+  const seq = await getNextSequence('complaints');
+  const firstLine = body.description.split(/\n/)[0];
+  const complaint = await Complaint.create({
+    trackingId: trackingIdFor(seq),
+    reporterId: user._id,
+    provenance: 'CITIZEN',
+    title: body.title || (firstLine.length > 80 ? `${firstLine.slice(0, 77)}...` : firstLine),
+    description: body.description,
+    language: body.language,
+    transcript: body.transcriptText ? { text: body.transcriptText, language: body.language, editedByUser: body.transcriptEditedByUser ?? true } : undefined,
+    category,
+    location: {
+      address: body.address,
+      area: body.area || nearestArea(body.latitude, body.longitude),
+      accuracy: body.locationAccuracy,
+      geo: { type: 'Point', coordinates: [body.longitude, body.latitude] },
+    },
+    media,
+    ai: { ...ai, category: ai.status === 'failed' ? undefined : ai.category, analysedAt: new Date() },
+    scoring: { total: score.total, band: score.band, factors: score.factors, modelVersion: score.modelVersion, computedAt: new Date() },
+    status: 'submitted',
+  });
 
-      // Process uploaded files (image or audio)
-      const mediaList: IComplaintMedia[] = [];
-      let imageBuffer: Buffer | undefined;
-      let imageMimeType: string | undefined;
+  await ComplaintUpdate.create({ complaintId: complaint._id, actorId: user._id, actorRole: 'citizen', type: 'submitted', toStatus: 'submitted', note: 'Report submitted.', isPublic: true });
 
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | Express.Multer.File[] | undefined;
+  if (candidates.length > 0) await linkToGroup(complaint, candidates[0]);
 
-      if (files) {
-        const fileArray = Array.isArray(files) ? files : Object.values(files).flat();
-        for (const file of fileArray) {
-          const isAudio = file.fieldname === 'audio' || file.mimetype.startsWith('audio/');
-          const subfolder = isAudio ? 'audio' : 'images';
-          const fileUrl = StorageService.getFileUrl(file, subfolder);
+  sendSuccess(
+    res,
+    {
+      complaint: ownerComplaint(complaint),
+      duplicate: candidates.length
+        ? { linked: true, related: candidates.map((c) => ({ complaint: publicComplaint(c.complaint), distanceMetres: c.distanceMetres, similarity: Number(c.score.toFixed(2)) })) }
+        : null,
+    },
+    'Report submitted',
+    201,
+  );
+});
 
-          mediaList.push({
-            type: isAudio ? 'audio' : 'image',
-            url: fileUrl,
-            mimeType: file.mimetype,
-            uploadedAt: new Date(),
-          });
+/** Preview before submission: are there similar open reports nearby? Never blocks submission. */
+export const checkDuplicates = asyncHandler(async (req: Request, res: Response) => {
+  const b = req.body as z.infer<typeof duplicateCheckSchema>;
+  const found = await findCandidates({ lat: b.latitude, lng: b.longitude, description: b.description, category: b.category });
+  sendSuccess(res, {
+    candidates: found.map((c) => ({
+      complaint: publicComplaint(c.complaint),
+      distanceMetres: c.distanceMetres,
+      similarity: Number(c.score.toFixed(2)),
+      isOwn: String(c.complaint.reporterId) === String(req.user!._id),
+    })),
+  });
+});
 
-          if (!isAudio && !imageBuffer) {
-            try {
-              imageBuffer = fs.readFileSync(file.path);
-              imageMimeType = file.mimetype;
-            } catch (e) {
-              logger.warn(`Could not read uploaded image buffer for AI: ${e}`);
-            }
-          }
-        }
-      }
+const visibleProvenance = (includeDemo: boolean) => (includeDemo ? { $in: ['CITIZEN', 'DEMO', 'IMPORTED_OFFICIAL'] } : { $in: ['CITIZEN', 'IMPORTED_OFFICIAL'] });
 
-      // 1. AI Analysis (Gemini 1.5 Flash with deterministic mock fallback)
-      const aiResult = await AIService.analyzeComplaint(title, description, imageBuffer, imageMimeType);
-
-      // 2. Transparent Multi-factor Severity Scoring
-      const severity = SeverityService.calculatePriority(
-        aiResult.aiSeverityRating,
-        aiResult.category,
-        0, // 0 initial upvotes
-        new Date()
-      );
-
-      // 3. 500m GeoSpatial + Jaccard Duplicate Grouping
-      const duplicateCheck = await DuplicateService.checkAndGroupDuplicates(
-        lng,
-        lat,
-        aiResult.category,
-        title,
-        description
-      );
-
-      // 4. Generate sequential reference ID (CE-HYD-YYYY-XXXXXX)
-      const seq = await getNextSequence('complaints');
-      const year = new Date().getFullYear();
-      const referenceId = `CE-HYD-${year}-${seq.toString().padStart(6, '0')}`;
-
-      // 5. Create and persist complaint document
-      const complaint = new Complaint({
-        referenceId,
-        citizenId: req.user.id,
-        title: title.trim(),
-        description: description.trim(),
-        language,
-        category: aiResult.category,
-        location: {
-          address: address.trim(),
-          area: area.trim(),
-          ward: ward?.trim() || 'GHMC Ward',
-          geo: {
-            type: 'Point',
-            coordinates: [lng, lat], // GeoJSON standard: [longitude, latitude]
-          },
-        },
-        media: mediaList,
-        transcription: transcribedText
-          ? {
-              transcribedText,
-              transcriptionSource: transcriptionSource || 'gemini',
-              language,
-            }
-          : undefined,
-        aiAnalysis: {
-          category: aiResult.category,
-          aiSeverityRating: aiResult.aiSeverityRating,
-          priorityScore: severity.priorityScore,
-          tags: aiResult.tags,
-          summary: aiResult.summary,
-          detectedLanguage: aiResult.detectedLanguage,
-          isSimulated: aiResult.isSimulated,
-          source: aiResult.source,
-          department: aiResult.department,
-          severityFactors: aiResult.severityFactors,
-          suggestedActions: aiResult.suggestedActions,
-          confidence: aiResult.confidence,
-          computedAt: new Date(),
-        },
-        duplicateGroupId: duplicateCheck.duplicateGroupId,
-        duplicateStatus: duplicateCheck.isDuplicateSuspect ? 'unreviewed' : 'unreviewed',
-        duplicateSimilarityScore: duplicateCheck.similarityScore,
-        status: 'pending',
-        timeline: [
-          {
-            status: 'pending',
-            note: 'Grievance submitted by citizen and queued for department verification.',
-            updatedBy: req.user.id,
-            timestamp: new Date(),
-          },
-        ],
-        upvotes: 0,
-        upvotedBy: [],
-        dataSource: 'CITIZEN_SUBMITTED',
-      });
-
-      await complaint.save();
-
-      sendSuccess(
-        res,
-        {
-          complaint,
-          severityDetails: severity,
-          duplicateNotice: duplicateCheck.isDuplicateSuspect
-            ? {
-                isSuspect: true,
-                message: `Notice: A similar ${aiResult.category} complaint was recently logged within 500 meters. Both reports have been grouped for administrator review.`,
-                similarityScore: duplicateCheck.similarityScore,
-                matchedComplaintTitle: duplicateCheck.matchedComplaintTitle,
-              }
-            : null,
-        },
-        'Complaint submitted successfully',
-        201
-      );
-    } catch (err: any) {
-      logger.error('Error submitting complaint:', err);
-      sendError(res, err.message || 'Failed to submit complaint', 500);
-    }
+export const list = asyncHandler(async (req: Request, res: Response) => {
+  const q = req.query as unknown as z.infer<typeof listSchema>;
+  const filter: Record<string, unknown> = { provenance: visibleProvenance(q.includeDemo) };
+  if (q.category) filter.category = q.category;
+  if (q.status) filter.status = q.status;
+  if (q.area) filter['location.area'] = q.area;
+  if (q.search) {
+    const rx = new RegExp(escapeRegex(q.search), 'i');
+    filter.$or = [{ trackingId: rx }, { title: rx }, { description: rx }, { 'location.area': rx }];
   }
+  const sort: Record<string, 1 | -1> = q.sort === 'priority' ? { 'scoring.total': -1, createdAt: -1 } : { createdAt: -1 };
 
-  /**
-   * List public / citizen complaints with search, category, status, area, and dataSource filters
-   */
-  static async getComplaints(req: Request, res: Response): Promise<void> {
-    try {
-      const {
-        category,
-        status,
-        area,
-        dataSource,
-        search,
-        page = '1',
-        limit = '10',
-        sortBy = 'createdAt',
-        sortOrder = 'desc',
-      } = req.query;
+  const [items, total] = await Promise.all([
+    Complaint.find(filter).populate('departmentId', 'code name').sort(sort).skip((q.page - 1) * q.limit).limit(q.limit),
+    Complaint.countDocuments(filter),
+  ]);
+  sendSuccess(res, { items: items.map((c) => publicComplaint(c)), pagination: { total, page: q.page, limit: q.limit, totalPages: Math.max(1, Math.ceil(total / q.limit)) } });
+});
 
-      const query: any = {};
+export const getOne = asyncHandler(async (req: Request, res: Response) => {
+  const c = await findByTrackingId(String(req.params.trackingId));
+  const [updates, supported, group] = await Promise.all([
+    ComplaintUpdate.find({ complaintId: c._id, isPublic: true }).sort({ createdAt: 1 }),
+    req.user ? Support.exists({ complaintId: c._id, userId: req.user._id }) : null,
+    c.duplicateGroupId ? DuplicateGroup.findById(c.duplicateGroupId) : null,
+  ]);
 
-      if (category && category !== 'All') {
-        query.category = category;
-      }
-      if (status && status !== 'All') {
-        query.status = status;
-      }
-      if (area && area !== 'All') {
-        query['location.area'] = area;
-      }
-      if (dataSource && dataSource !== 'All') {
-        query.dataSource = dataSource;
-      }
-      if (search) {
-        const regex = new RegExp(String(search), 'i');
-        query.$or = [
-          { referenceId: regex },
-          { title: regex },
-          { description: regex },
-          { 'location.address': regex },
-          { 'location.area': regex },
-        ];
-      }
-
-      const pageNum = parseInt(String(page), 10) || 1;
-      const limitNum = parseInt(String(limit), 10) || 10;
-      const skip = (pageNum - 1) * limitNum;
-
-      const sortField = String(sortBy) === 'priorityScore' ? 'aiAnalysis.priorityScore' : String(sortBy);
-      const sortDirection = sortOrder === 'asc' ? 1 : -1;
-
-      const [complaints, total] = await Promise.all([
-        Complaint.find(query)
-          .populate('citizenId', 'name email preferredLanguage')
-          .populate('department', 'name code')
-          .sort({ [sortField]: sortDirection })
-          .skip(skip)
-          .limit(limitNum),
-        Complaint.countDocuments(query),
-      ]);
-
-      sendSuccess(res, {
-        complaints,
-        pagination: {
-          total,
-          page: pageNum,
-          limit: limitNum,
-          totalPages: Math.ceil(total / limitNum),
-        },
-      });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
-    }
+  let related: { trackingId: string; title: string; status: string }[] = [];
+  if (group && group.status !== 'rejected') {
+    const others = await Complaint.find({ _id: { $in: group.memberIds, $ne: c._id }, provenance: c.provenance }).select('trackingId title status').limit(5);
+    related = others.map((o) => ({ trackingId: o.trackingId, title: o.title, status: o.status }));
   }
+  const isOwner = req.user && String(req.user._id) === String(c.reporterId);
+  sendSuccess(res, {
+    complaint: isOwner ? { ...ownerComplaint(c), hasSupported: !!supported } : publicComplaint(c, { hasSupported: !!supported }),
+    updates: updates.map(publicUpdate),
+    related,
+  });
+});
 
-  /**
-   * Get complaints filed by the currently logged-in citizen
-   */
-  static async getMyComplaints(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        sendError(res, 'Authentication required', 401);
-        return;
-      }
+export const mine = asyncHandler(async (req: Request, res: Response) => {
+  const items = await Complaint.find({ reporterId: req.user!._id }).populate('departmentId', 'code name').sort({ createdAt: -1 }).limit(100);
+  sendSuccess(res, { items: items.map(ownerComplaint) });
+});
 
-      const complaints = await Complaint.find({ citizenId: req.user.id })
-        .populate('department', 'name code')
-        .sort({ createdAt: -1 });
-
-      sendSuccess(res, { complaints });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
+const supportChange = (add: boolean) =>
+  asyncHandler(async (req: Request, res: Response) => {
+    const c = await findByTrackingId(String(req.params.trackingId));
+    if (String(c.reporterId) === String(req.user!._id)) {
+      throw new AppError(400, 'CONFLICT', 'You cannot support your own report.');
     }
-  }
-
-  /**
-   * Get complaints GeoJSON feature collection for Leaflet Map
-   * Note: GeoJSON stores [longitude, latitude]. We transform to [latitude, longitude] Leaflet points.
-   */
-  static async getMapData(req: Request, res: Response): Promise<void> {
-    try {
-      const { category, status, dataSource } = req.query;
-      const query: any = {};
-
-      if (category && category !== 'All') query.category = category;
-      if (status && status !== 'All') query.status = status;
-      if (dataSource && dataSource !== 'All') query.dataSource = dataSource;
-
-      const complaints = await Complaint.find(query)
-        .select('referenceId title category status location aiAnalysis createdAt upvotes dataSource')
-        .lean();
-
-      const features = complaints.map((c) => {
-        const [lng, lat] = c.location.geo.coordinates;
-        return {
-          type: 'Feature',
-          geometry: {
-            type: 'Point',
-            // Coordinates provided in Leaflet standard format [lat, lng] for direct React-Leaflet usage
-            coordinates: [lat, lng],
-          },
-          properties: {
-            id: c._id,
-            referenceId: c.referenceId || `CE-HYD-2026-${String(c._id).slice(-6).toUpperCase()}`,
-            title: c.title,
-            category: c.category,
-            status: c.status,
-            priorityScore: c.aiAnalysis?.priorityScore || 50,
-            aiSeverityRating: c.aiAnalysis?.aiSeverityRating || 5,
-            isSimulated: c.aiAnalysis?.isSimulated || false,
-            address: c.location.address,
-            area: c.location.area,
-            upvotes: c.upvotes || 0,
-            dataSource: c.dataSource || 'CITIZEN_SUBMITTED',
-            createdAt: c.createdAt,
-          },
-        };
-      });
-
-      sendSuccess(res, {
-        type: 'FeatureCollection',
-        features,
-        total: features.length,
-      });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
+    if (c.status === 'rejected' || c.status === 'resolved') throw new AppError(409, 'CONFLICT', 'This report is closed.');
+    if (add) {
+      await Support.updateOne({ complaintId: c._id, userId: req.user!._id }, { $setOnInsert: { complaintId: c._id, userId: req.user!._id } }, { upsert: true });
+    } else {
+      await Support.deleteOne({ complaintId: c._id, userId: req.user!._id });
     }
+    c.supportCount = await Support.countDocuments({ complaintId: c._id });
+    rescore(c as IComplaint);
+    await c.save();
+    sendSuccess(res, { supportCount: c.supportCount, hasSupported: add, priority: { score: c.scoring.total, band: c.scoring.band } });
+  });
+
+export const addSupport = supportChange(true);
+export const removeSupport = supportChange(false);
+
+export const mapPoints = asyncHandler(async (req: Request, res: Response) => {
+  const q = req.query as unknown as z.infer<typeof mapSchema>;
+  const filter: Record<string, unknown> = { provenance: visibleProvenance(q.includeDemo) };
+  if (q.category) filter.category = q.category;
+  if (q.status) filter.status = q.status;
+  const items = await Complaint.find(filter).select('trackingId title category status scoring location provenance').sort({ createdAt: -1 }).limit(2000);
+  sendSuccess(res, {
+    points: items.map((c) => ({
+      id: String(c._id),
+      trackingId: c.trackingId,
+      title: c.title,
+      category: c.category,
+      status: c.status,
+      priority: { score: c.scoring.total, band: c.scoring.band },
+      area: c.location.area,
+      accuracy: c.location.accuracy,
+      provenance: c.provenance,
+      lat: c.location.geo.coordinates[1],
+      lng: c.location.geo.coordinates[0],
+    })),
+    total: items.length,
+  });
+});
+
+/** GET /data-sources: what the platform's data is made of, plus any APPROVED official aggregate datasets. */
+export const dataSources = asyncHandler(async (_req: Request, res: Response) => {
+  const [citizen, demo, imported] = await Promise.all([
+    Complaint.countDocuments({ provenance: 'CITIZEN' }),
+    Complaint.countDocuments({ provenance: 'DEMO' }),
+    Complaint.countDocuments({ provenance: 'IMPORTED_OFFICIAL' }),
+  ]);
+  sendSuccess(res, {
+    composition: { citizen, demo, importedOfficial: imported },
+    officialComplaintDataAvailable: imported > 0,
+    datasets: await approvedDatasets(),
+    researchedOn: '2026-11-21',
+  });
+});
+
+export const analytics = asyncHandler(async (req: Request, res: Response) => {
+  sendSuccess(res, await computeAnalytics(req.query as unknown as z.infer<typeof analyticsSchema>));
+});
+
+export const translateSchema = z.object({ target: z.enum(['en', 'te', 'hi']) });
+
+/**
+ * Machine translation of the report description on request. The original text is never changed;
+ * results are cached per target language until the description changes.
+ */
+export const translateComplaint = asyncHandler(async (req: Request, res: Response) => {
+  const { target } = req.body as z.infer<typeof translateSchema>;
+  const c = await findByTrackingId(String(req.params.trackingId));
+  const hash = hashText(c.description);
+  const cached = c.translations?.[target];
+  if (cached && cached.sourceHash === hash) {
+    sendSuccess(res, { target, text: cached.text, model: cached.model, cached: true });
+    return;
   }
-
-  /**
-   * Public aggregated metrics for Recharts visualizations
-   */
-  static async getAnalyticsSummary(req: Request, res: Response): Promise<void> {
-    try {
-      const [
-        totalCount,
-        resolvedCount,
-        inProgressCount,
-        pendingCount,
-        byCategory,
-        byStatus,
-        byArea,
-        byDataSource,
-        recentComplaints,
-      ] = await Promise.all([
-        Complaint.countDocuments(),
-        Complaint.countDocuments({ status: 'resolved' }),
-        Complaint.countDocuments({ status: 'in-progress' }),
-        Complaint.countDocuments({ status: 'pending' }),
-        Complaint.aggregate([
-          { $group: { _id: '$category', count: { $sum: 1 }, avgScore: { $avg: '$aiAnalysis.priorityScore' } } },
-          { $project: { category: '$_id', count: 1, avgScore: { $round: ['$avgScore', 1] }, _id: 0 } },
-          { $sort: { count: -1 } },
-        ]),
-        Complaint.aggregate([
-          { $group: { _id: '$status', count: { $sum: 1 } } },
-          { $project: { status: '$_id', count: 1, _id: 0 } },
-        ]),
-        Complaint.aggregate([
-          { $group: { _id: '$location.area', count: { $sum: 1 } } },
-          { $project: { area: '$_id', count: 1, _id: 0 } },
-          { $sort: { count: -1 } },
-          { $limit: 8 },
-        ]),
-        Complaint.aggregate([
-          { $group: { _id: '$dataSource', count: { $sum: 1 } } },
-          { $project: { source: '$_id', count: 1, _id: 0 } },
-        ]),
-        Complaint.find()
-          .sort({ createdAt: -1 })
-          .limit(5)
-          .select('referenceId title category status location.area aiAnalysis.priorityScore dataSource createdAt'),
-      ]);
-
-      // Calculate resolution rate
-      const resolutionRate = totalCount > 0 ? Math.round((resolvedCount / totalCount) * 100) : 0;
-
-      sendSuccess(res, {
-        kpis: {
-          totalCount,
-          resolvedCount,
-          inProgressCount,
-          pendingCount,
-          resolutionRate,
-        },
-        byCategory,
-        byStatus,
-        byArea,
-        byDataSource,
-        recentComplaints,
-      });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
-    }
-  }
-
-  /**
-   * Single complaint details by ID or referenceId
-   */
-  static async getComplaintById(req: Request, res: Response): Promise<void> {
-    try {
-      const rawId = req.params.id as string;
-      if (!rawId) {
-        sendError(res, 'Complaint identifier is required', 400);
-        return;
-      }
-
-      // Check whether search query matches MongoDB ObjectId or human-readable referenceId
-      const isObjectId = mongoose.Types.ObjectId.isValid(rawId);
-      const query = isObjectId ? { $or: [{ _id: rawId }, { referenceId: rawId }] } : { referenceId: rawId };
-
-      const complaint = await Complaint.findOne(query)
-        .populate('citizenId', 'name email preferredLanguage')
-        .populate('department', 'name code contactEmail')
-        .populate('timeline.updatedBy', 'name role');
-
-      if (!complaint) {
-        sendError(res, 'Complaint not found', 404);
-        return;
-      }
-
-      // If duplicate group exists, fetch related grouped complaints for transparency
-      let duplicateGroup: any[] = [];
-      if (complaint.duplicateGroupId) {
-        duplicateGroup = await Complaint.find({
-          duplicateGroupId: complaint.duplicateGroupId,
-          _id: { $ne: complaint._id },
-        }).select('referenceId title category status location.area createdAt');
-      }
-
-      sendSuccess(res, {
-        complaint,
-        duplicateGroup,
-      });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
-    }
-  }
-
-  /**
-   * Upvote a complaint (citizens can upvote to increase community urgency proxy)
-   */
-  static async toggleUpvote(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        sendError(res, 'Authentication required to upvote', 401);
-        return;
-      }
-
-      const { id } = req.params;
-      const complaint = await Complaint.findById(id);
-      if (!complaint) {
-        sendError(res, 'Complaint not found', 404);
-        return;
-      }
-
-      const userId = new mongoose.Types.ObjectId(req.user.id);
-      const hasUpvoted = complaint.upvotedBy.some((uid) => uid.equals(userId));
-
-      if (hasUpvoted) {
-        // Remove upvote
-        complaint.upvotedBy = complaint.upvotedBy.filter((uid) => !uid.equals(userId));
-        complaint.upvotes = Math.max(0, complaint.upvotes - 1);
-      } else {
-        // Add upvote
-        complaint.upvotedBy.push(userId);
-        complaint.upvotes += 1;
-      }
-
-      // Recalculate priority score with updated upvote count
-      const updatedSeverity = SeverityService.calculatePriority(
-        complaint.aiAnalysis.aiSeverityRating,
-        complaint.category,
-        complaint.upvotes,
-        complaint.createdAt
-      );
-
-      complaint.aiAnalysis.priorityScore = updatedSeverity.priorityScore;
-      await complaint.save();
-
-      sendSuccess(res, {
-        upvotes: complaint.upvotes,
-        hasUpvoted: !hasUpvoted,
-        priorityScore: complaint.aiAnalysis.priorityScore,
-      });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
-    }
-  }
-}
+  const text = await translate(c.description, target);
+  c.translations = { ...(c.translations ?? {}), [target]: { text, model: ENV.GEMINI_MODEL, at: new Date(), sourceHash: hash } };
+  c.markModified('translations');
+  await c.save();
+  sendSuccess(res, { target, text, model: ENV.GEMINI_MODEL, cached: false });
+});

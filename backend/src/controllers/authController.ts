@@ -1,273 +1,97 @@
-import { Request, Response } from 'express';
+import { CookieOptions, Request, Response } from 'express';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
-import { User } from '../models/User';
+import { User, IUser } from '../models/User';
 import { signToken } from '../utils/jwt';
-import { sendSuccess, sendError } from '../utils/responseHelper';
+import { sendSuccess } from '../utils/responseHelper';
+import { AppError, asyncHandler } from '../utils/errors';
 import { ENV } from '../config/env';
+import { BCRYPT_COST } from '../services/seedService';
 
-const registerSchema = z.object({
-  name: z.string().min(2, 'Name must be at least 2 characters'),
-  email: z.string().email('Valid email is required'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
+export const registerSchema = z.object({
+  name: z.string().trim().min(2, 'Name must be at least 2 characters').max(80),
+  email: z.string().trim().toLowerCase().email('Enter a valid email address').max(254),
+  password: z.string().min(8, 'Password must be at least 8 characters').max(128),
+  phone: z.string().trim().regex(/^[+0-9 ()-]{7,20}$/, 'Enter a valid phone number').optional().or(z.literal('').transform(() => undefined)),
   preferredLanguage: z.enum(['en', 'te', 'hi']).default('en'),
-  phone: z.string().optional(),
 });
 
-const loginSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(1),
+export const loginSchema = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+  password: z.string().min(1).max(128),
 });
 
-const setAuthCookie = (res: Response, token: string) => {
-  res.cookie('token', token, {
-    httpOnly: true,
-    secure: ENV.NODE_ENV === 'production',
-    sameSite: ENV.NODE_ENV === 'production' ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-    path: '/',
-  });
+export const profileSchema = z
+  .object({
+    name: z.string().trim().min(2).max(80).optional(),
+    phone: z.string().trim().regex(/^[+0-9 ()-]{7,20}$/).optional().or(z.literal('')),
+    preferredLanguage: z.enum(['en', 'te', 'hi']).optional(),
+    currentPassword: z.string().max(128).optional(),
+    newPassword: z.string().min(8).max(128).optional(),
+  })
+  .refine((v) => !v.newPassword || !!v.currentPassword, { message: 'Current password is required to set a new one', path: ['currentPassword'] });
+
+const COOKIE: CookieOptions = {
+  httpOnly: true,
+  secure: ENV.NODE_ENV === 'production',
+  sameSite: 'lax',
+  path: '/',
 };
 
-export class AuthController {
-  static async register(req: Request, res: Response): Promise<void> {
-    try {
-      const validated = registerSchema.parse(req.body);
+// Used to keep login timing similar whether or not the account exists.
+const DUMMY_HASH = bcrypt.hashSync('not-a-real-password', BCRYPT_COST);
 
-      const existing = await User.findOne({ email: validated.email.toLowerCase() });
-      if (existing) {
-        sendError(res, 'User with this email already exists', 409);
-        return;
-      }
+const publicUser = (u: IUser) => ({ id: String(u._id), name: u.name, email: u.email, role: u.role, phone: u.phone, preferredLanguage: u.preferredLanguage });
 
-      const salt = await bcrypt.genSalt(10);
-      const passwordHash = await bcrypt.hash(validated.password, salt);
+const startSession = (res: Response, user: IUser) => {
+  const token = signToken({ id: String(user._id), role: user.role });
+  res.cookie('token', token, { ...COOKIE, maxAge: 8 * 60 * 60 * 1000 });
+};
 
-      const user = await User.create({
-        name: validated.name,
-        email: validated.email.toLowerCase(),
-        passwordHash,
-        role: 'citizen',
-        preferredLanguage: validated.preferredLanguage,
-        phone: validated.phone,
-      });
+export const register = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as z.infer<typeof registerSchema>;
+  if (await User.exists({ email: body.email })) throw new AppError(409, 'EMAIL_EXISTS', 'An account with this email already exists.');
+  // Role is always "citizen" here. Administrators are created only through the bootstrap script / env.
+  const user = await User.create({
+    name: body.name,
+    email: body.email,
+    passwordHash: await bcrypt.hash(body.password, BCRYPT_COST),
+    role: 'citizen',
+    phone: body.phone,
+    preferredLanguage: body.preferredLanguage,
+  });
+  startSession(res, user);
+  sendSuccess(res, { user: publicUser(user) }, 'Registered', 201);
+});
 
-      const token = signToken({
-        id: (user._id as any).toString(),
-        role: user.role,
-        email: user.email,
-        name: user.name,
-      });
+export const login = asyncHandler(async (req: Request, res: Response) => {
+  const { email, password } = req.body as z.infer<typeof loginSchema>;
+  const user = await User.findOne({ email });
+  const ok = await bcrypt.compare(password, user?.passwordHash ?? DUMMY_HASH);
+  if (!user || !ok || !user.isActive) throw new AppError(401, 'INVALID_CREDENTIALS', 'Incorrect email or password.');
+  startSession(res, user);
+  sendSuccess(res, { user: publicUser(user) });
+});
 
-      setAuthCookie(res, token);
+export const logout = (_req: Request, res: Response) => {
+  res.clearCookie('token', COOKIE);
+  sendSuccess(res, null, 'Logged out');
+};
 
-      sendSuccess(
-        res,
-        {
-          token,
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            preferredLanguage: user.preferredLanguage,
-          },
-        },
-        'Registration successful',
-        201
-      );
-    } catch (err: any) {
-      if (err.errors) {
-        sendError(res, 'Validation error', 400, err.errors);
-        return;
-      }
-      sendError(res, err.message || 'Registration failed', 500);
+export const me = (req: Request, res: Response) => sendSuccess(res, { user: publicUser(req.user!) });
+
+export const updateProfile = asyncHandler(async (req: Request, res: Response) => {
+  const body = req.body as z.infer<typeof profileSchema>;
+  const user = req.user!;
+  if (body.name) user.name = body.name;
+  if (body.phone !== undefined) user.phone = body.phone || undefined;
+  if (body.preferredLanguage) user.preferredLanguage = body.preferredLanguage;
+  if (body.newPassword) {
+    if (!(await bcrypt.compare(body.currentPassword!, user.passwordHash))) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'Current password is incorrect.', { currentPassword: 'Current password is incorrect.' });
     }
+    user.passwordHash = await bcrypt.hash(body.newPassword, BCRYPT_COST);
   }
-
-  static async login(req: Request, res: Response): Promise<void> {
-    try {
-      const validated = loginSchema.parse(req.body);
-
-      const user = await User.findOne({ email: validated.email.toLowerCase() });
-      if (!user) {
-        sendError(res, 'Invalid email or password', 401);
-        return;
-      }
-
-      const isMatch = await bcrypt.compare(validated.password, user.passwordHash);
-      if (!isMatch) {
-        sendError(res, 'Invalid email or password', 401);
-        return;
-      }
-
-      const token = signToken({
-        id: (user._id as any).toString(),
-        role: user.role,
-        email: user.email,
-        name: user.name,
-      });
-
-      setAuthCookie(res, token);
-
-      sendSuccess(
-        res,
-        {
-          token,
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            preferredLanguage: user.preferredLanguage,
-          },
-        },
-        'Login successful'
-      );
-    } catch (err: any) {
-      if (err.errors) {
-        sendError(res, 'Validation error', 400, err.errors);
-        return;
-      }
-      sendError(res, err.message || 'Login failed', 500);
-    }
-  }
-
-  static async demoLogin(req: Request, res: Response): Promise<void> {
-    try {
-      const { role } = req.body; // 'citizen' or 'admin'
-      const targetEmail = role === 'admin' ? 'admin@civiceye.demo' : 'citizen@civiceye.demo';
-
-      let user = await User.findOne({ email: targetEmail });
-      if (!user) {
-        // Auto-seed on demo login if user doesn't exist yet
-        const salt = await bcrypt.genSalt(10);
-        const passwordHash = await bcrypt.hash(role === 'admin' ? 'admin1234' : 'demo1234', salt);
-        user = await User.create({
-          name: role === 'admin' ? 'Demo Administrator' : 'Demo Citizen (Ramesh Kumar)',
-          email: targetEmail,
-          passwordHash,
-          role: role === 'admin' ? 'admin' : 'citizen',
-          preferredLanguage: 'en',
-          phone: '9876543210',
-        });
-      }
-
-      const token = signToken({
-        id: (user._id as any).toString(),
-        role: user.role,
-        email: user.email,
-        name: user.name,
-      });
-
-      setAuthCookie(res, token);
-
-      sendSuccess(
-        res,
-        {
-          token,
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            preferredLanguage: user.preferredLanguage,
-          },
-        },
-        `Logged in as ${role}`
-      );
-    } catch (err: any) {
-      sendError(res, err.message || 'Demo login failed', 500);
-    }
-  }
-
-  static async logout(req: Request, res: Response): Promise<void> {
-    res.clearCookie('token', {
-      httpOnly: true,
-      secure: ENV.NODE_ENV === 'production',
-      sameSite: ENV.NODE_ENV === 'production' ? 'none' : 'lax',
-      path: '/',
-    });
-    sendSuccess(res, null, 'Logged out successfully');
-  }
-
-  static async getMe(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        sendError(res, 'Not authenticated', 401);
-        return;
-      }
-
-      const user = await User.findById(req.user.id).select('-passwordHash');
-      if (!user) {
-        sendError(res, 'User not found', 404);
-        return;
-      }
-
-      sendSuccess(res, { user });
-    } catch (err: any) {
-      sendError(res, err.message, 500);
-    }
-  }
-
-  static async updateProfile(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        sendError(res, 'Not authenticated', 401);
-        return;
-      }
-
-      const { name, phone, preferredLanguage, currentPassword, newPassword } = req.body;
-
-      const user = await User.findById(req.user.id);
-      if (!user) {
-        sendError(res, 'User not found', 404);
-        return;
-      }
-
-      if (name && typeof name === 'string' && name.trim().length >= 2) {
-        user.name = name.trim();
-      }
-      if (phone !== undefined) {
-        user.phone = typeof phone === 'string' ? phone.trim() : '';
-      }
-      if (preferredLanguage && ['en', 'te', 'hi'].includes(preferredLanguage)) {
-        user.preferredLanguage = preferredLanguage;
-      }
-
-      // Optional secure password change
-      if (newPassword && newPassword.length >= 6) {
-        if (!currentPassword) {
-          sendError(res, 'Current password is required to set a new password', 400);
-          return;
-        }
-        const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
-        if (!isMatch) {
-          sendError(res, 'Current password does not match', 400);
-          return;
-        }
-        const salt = await bcrypt.genSalt(10);
-        user.passwordHash = await bcrypt.hash(newPassword, salt);
-      }
-
-      await user.save();
-
-      sendSuccess(
-        res,
-        {
-          user: {
-            id: user._id,
-            name: user.name,
-            email: user.email,
-            role: user.role,
-            phone: user.phone,
-            preferredLanguage: user.preferredLanguage,
-          },
-        },
-        'Profile updated successfully'
-      );
-    } catch (err: any) {
-      sendError(res, err.message || 'Failed to update profile', 500);
-    }
-  }
-}
+  await user.save();
+  sendSuccess(res, { user: publicUser(user) }, 'Profile updated');
+});

@@ -1,144 +1,113 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { complaintsApi } from '../api/complaintsApi';
-import { HyderabadMap } from '../components/HyderabadMap';
-import { Breadcrumb } from '../components/ui/Breadcrumb';
-import { Button } from '../components/ui/Button';
-import { MapPin, RotateCcw, Loader2, ShieldCheck, Layers, Info } from 'lucide-react';
-
-const CATEGORIES = [
-  'All',
-  'Roads',
-  'Drainage',
-  'Electricity',
-  'Water Supply',
-  'Sanitation',
-  'Street Lights',
-  'Parks',
-  'Other',
-];
-
-const STATUSES = ['All', 'pending', 'assigned', 'in-progress', 'resolved'];
+import { CATEGORIES, MapPoint, STATUSES } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
+import { fmt } from '../i18n';
+import { errorMessage } from '../utils/errorMessage';
+import { HyderabadMap, MapLegend } from '../components/HyderabadMap';
+import { Select } from '../components/ui/Field';
+import { Alert } from '../components/ui/Alert';
+import { StatusBadge } from '../components/StatusBadge';
+import { SeverityBadge } from '../components/SeverityBadge';
+import { ProvenanceBadge } from '../components/ProvenanceBadge';
+import { Page, PageHeader } from '../components/PageHeader';
 
 export const MapPage: React.FC = () => {
-  const [features, setFeatures] = useState<any[]>([]);
-  const [category, setCategory] = useState('All');
-  const [status, setStatus] = useState('All');
+  const { t } = useLanguage();
+  const [points, setPoints] = useState<MapPoint[]>([]);
   const [loading, setLoading] = useState(true);
-
-  const fetchMapFeatures = async () => {
-    setLoading(true);
-    try {
-      const data = await complaintsApi.getMapData({ category, status });
-      setFeatures(data.features || []);
-    } catch (err) {
-      console.error('Failed to load map data:', err);
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<'map' | 'list'>('map');
+  const [category, setCategory] = useState('');
+  const [status, setStatus] = useState('');
+  const [includeDemo, setIncludeDemo] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    fetchMapFeatures();
-  }, [category, status]);
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    complaintsApi
+      .map({ category, status, includeDemo })
+      .then((p) => !cancelled && setPoints(p))
+      .catch((e) => !cancelled && setError(errorMessage(e, t)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [category, status, includeDemo, reloadKey]);
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb items={[{ label: 'Home', href: '/' }, { label: 'Hyderabad Spatial GIS' }]} />
-
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-civic-50 text-civic-900 border border-civic-200 text-xs font-semibold mb-1">
-            <MapPin className="w-3.5 h-3.5 text-civic-700" />
-            <span>GHMC Geospatial 2dsphere Layer</span>
-          </div>
-          <h1 className="text-2xl font-bold text-civic-900 tracking-tight">
-            Hyderabad Civic Grievance Spatial Explorer
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Displaying <strong className="text-slate-800 font-mono">{features.length}</strong> geo-referenced civic issues across Hyderabad localities indexed with OpenStreetMap and GeoJSON points.
-          </p>
-        </div>
-
-        {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="h-8 px-2 text-xs rounded border border-slate-300 bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-civic-700"
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c === 'All' ? 'All Categories' : c}
-              </option>
+    <Page>
+      <PageHeader
+        title={t.map.title}
+        subtitle={t.map.subtitle}
+        actions={
+          <div className="inline-flex rounded-md border border-slate-400 overflow-hidden" role="group">
+            {(['map', 'list'] as const).map((v) => (
+              <button
+                key={v}
+                onClick={() => setView(v)}
+                aria-pressed={view === v}
+                className={`px-4 py-1.5 text-sm ${view === v ? 'bg-civic-700 text-white' : 'bg-white text-slate-800 hover:bg-slate-50'}`}
+              >
+                {v === 'map' ? t.map.mapView : t.map.listView}
+              </button>
             ))}
-          </select>
+          </div>
+        }
+      />
 
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="h-8 px-2 text-xs rounded border border-slate-300 bg-white font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-civic-700 capitalize"
-          >
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s === 'All' ? 'All Statuses' : s}
-              </option>
-            ))}
-          </select>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setCategory('All');
-              setStatus('All');
-            }}
-            title="Reset Filters"
-          >
-            <RotateCcw className="w-3.5 h-3.5 mr-1" />
-            <span>Reset</span>
-          </Button>
-        </div>
+      <div className="grid gap-3 sm:grid-cols-3 items-end mb-3">
+        <Select label={t.common.category} value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">{t.common.all}</option>
+          {CATEGORIES.map((c) => <option key={c} value={c}>{t.categories[c]}</option>)}
+        </Select>
+        <Select label={t.common.status} value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">{t.common.all}</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{t.status[s]}</option>)}
+        </Select>
+        <label className="flex items-center gap-2 text-sm pb-2">
+          <input type="checkbox" checked={includeDemo} onChange={(e) => setIncludeDemo(e.target.checked)} />
+          {t.explore.showDemo}
+        </label>
       </div>
 
-      {/* Map Container */}
-      <div className="rounded-lg border border-slate-200 overflow-hidden shadow-xs bg-white">
-        {loading ? (
-          <div className="h-[550px] flex flex-col items-center justify-center text-slate-400 gap-2 bg-slate-50">
-            <Loader2 className="w-6 h-6 animate-spin text-civic-700" />
-            <span className="text-xs font-medium">Loading geospatial vector layer...</span>
-          </div>
-        ) : (
-          <HyderabadMap features={features} height="600px" />
-        )}
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <MapLegend />
+        {!loading && !error && <span className="text-sm text-slate-600">{fmt(t.map.count, { n: points.length })}</span>}
       </div>
 
-      {/* Map Legend */}
-      <div className="p-3 bg-white rounded-lg border border-slate-200 text-xs flex flex-wrap items-center justify-between gap-3 text-slate-600">
-        <div className="flex items-center gap-4">
-          <span className="font-semibold text-slate-800">Pin Severity Legend:</span>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-rose-600"></span>
-            <span>Critical (&gt;75)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-amber-500"></span>
-            <span>Moderate (40-75)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-blue-500"></span>
-            <span>Low (&lt;40)</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-3 h-3 rounded-full bg-emerald-600"></span>
-            <span>Resolved</span>
-          </div>
-        </div>
-        <div className="text-[11px] text-slate-400 font-mono">
-          EPSG:4326 GeoJSON • OpenStreetMap Cartography
-        </div>
-      </div>
-    </div>
+      {error ? (
+        <Alert variant="error">
+          {error} <button className="underline" onClick={() => setReloadKey((k) => k + 1)}>{t.common.retry}</button>
+        </Alert>
+      ) : loading ? (
+        <p className="text-slate-600">{t.common.loading}</p>
+      ) : view === 'map' ? (
+        <>
+          <HyderabadMap points={points} />
+          {points.length === 0 && <p className="mt-3 text-slate-700">{t.common.noResults}</p>}
+        </>
+      ) : points.length === 0 ? (
+        <p className="py-8 text-center text-slate-700">{t.common.noResults}</p>
+      ) : (
+        <ul className="divide-y divide-slate-200 rounded-lg border border-slate-200 bg-white">
+          {points.map((p) => (
+            <li key={p.id} className="p-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+              <Link to={`/track/${p.trackingId}`} className="font-medium text-civic-800 hover:underline flex-1 min-w-[12rem]">
+                {p.title}
+              </Link>
+              <span className="text-sm text-slate-600">{p.area}</span>
+              <StatusBadge status={p.status} size="sm" />
+              <SeverityBadge score={p.priority.score} size="sm" showScore={false} />
+              <ProvenanceBadge source={p.provenance} />
+            </li>
+          ))}
+        </ul>
+      )}
+    </Page>
   );
 };

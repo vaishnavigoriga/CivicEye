@@ -39,7 +39,7 @@ export const Alert: React.FC<AlertProps> = ({
 
   return (
     <div
-      className={`p-3.5 rounded-md border text-xs leading-relaxed flex items-start justify-between gap-3 ${current.container} ${className}`}
+      className={`p-3.5 rounded-md border text-sm leading-relaxed flex items-start justify-between gap-3 ${current.container} ${className}`}
       role="alert"
     >
       <div className="flex items-start gap-2.5">

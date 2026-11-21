@@ -1,6 +1,6 @@
 import React from 'react';
 import { getSeverityInfo } from '../utils/severityColor';
-import { AlertCircle } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
 
 interface SeverityBadgeProps {
   score: number;
@@ -8,29 +8,17 @@ interface SeverityBadgeProps {
   size?: 'sm' | 'md' | 'lg';
 }
 
-export const SeverityBadge: React.FC<SeverityBadgeProps> = ({
-  score = 50,
-  showScore = true,
-  size = 'md',
-}) => {
+export const SeverityBadge: React.FC<SeverityBadgeProps> = ({ score = 50, showScore = true, size = 'md' }) => {
+  const { t } = useLanguage();
   const info = getSeverityInfo(score);
-
-  const sizeClasses = {
-    sm: 'px-2 py-0.5 text-[10px]',
-    md: 'px-2.5 py-1 text-xs',
-    lg: 'px-3 py-1.5 text-sm',
-  };
-
+  const sizes = { sm: 'px-1.5 py-0.5 text-[11px]', md: 'px-2 py-0.5 text-xs', lg: 'px-2.5 py-1 text-sm' };
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full font-bold border shadow-xs ${info.bgClass} ${info.textClass} ${info.borderClass} ${sizeClasses[size]}`}
+      className={`inline-flex items-center gap-1.5 rounded border font-medium ${info.bgClass} ${info.textClass} ${info.borderClass} ${sizes[size]}`}
     >
-      <span
-        className="w-2 h-2 rounded-full animate-pulse"
-        style={{ backgroundColor: info.hex }}
-      />
-      <span>{info.band} Severity</span>
-      {showScore && <span className="opacity-80">({score}/100)</span>}
+      <span className="w-2 h-2 rounded-full" style={{ backgroundColor: info.hex }} aria-hidden="true" />
+      <span>{t.priority[info.band]}</span>
+      {showScore && <span className="tabular-nums opacity-80">{score}/100</span>}
     </span>
   );
 };

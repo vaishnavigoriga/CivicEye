@@ -4,16 +4,12 @@ import { ENV } from '../config/env';
 export interface TokenPayload {
   id: string;
   role: 'citizen' | 'admin';
-  email: string;
-  name: string;
 }
 
-export const signToken = (payload: TokenPayload): string => {
-  return jwt.sign(payload, ENV.JWT_SECRET, {
-    expiresIn: '7d',
-  });
-};
+export const signToken = (payload: TokenPayload): string =>
+  jwt.sign(payload, ENV.JWT_SECRET, { expiresIn: ENV.JWT_EXPIRES_IN as jwt.SignOptions['expiresIn'] });
 
 export const verifyToken = (token: string): TokenPayload => {
-  return jwt.verify(token, ENV.JWT_SECRET) as TokenPayload;
+  const decoded = jwt.verify(token, ENV.JWT_SECRET) as TokenPayload;
+  return { id: decoded.id, role: decoded.role };
 };

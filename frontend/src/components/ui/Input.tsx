@@ -15,7 +15,7 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
     return (
       <div className="w-full space-y-1">
         {label && (
-          <label htmlFor={inputId} className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
+          <label htmlFor={inputId} className="block text-sm font-medium text-slate-800">
             {label}
             {props.required && <span className="text-rose-600 ml-1">*</span>}
           </label>
@@ -29,10 +29,10 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           <input
             id={inputId}
             ref={ref}
-            className={`w-full rounded-md border text-sm transition-colors focus:outline-none focus:ring-1 focus:ring-civic-700 bg-white placeholder:text-slate-400 ${
+            className={`w-full rounded-md border text-sm transition-colors bg-white placeholder:text-slate-500 ${
               error
                 ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-500 text-rose-900'
-                : 'border-slate-300 hover:border-slate-400 focus:border-civic-700 text-slate-900'
+                : 'border-slate-400 hover:border-slate-500 text-slate-900'
             } ${leftAddon ? 'pl-9' : 'pl-3'} ${rightAddon ? 'pr-9' : 'pr-3'} py-2 ${className}`}
             {...props}
           />
@@ -43,9 +43,9 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           )}
         </div>
         {error ? (
-          <p className="text-xs text-rose-600 font-medium">{error}</p>
+          <p className="text-sm text-rose-700" role="alert">{error}</p>
         ) : helperText ? (
-          <p className="text-xs text-slate-500">{helperText}</p>
+          <p className="text-sm text-slate-600">{helperText}</p>
         ) : null}
       </div>
     );

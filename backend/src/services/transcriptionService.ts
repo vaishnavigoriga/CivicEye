@@ -1,85 +1,44 @@
-import fs from 'fs';
-import { GoogleGenerativeAI } from '@google/generative-ai';
-import { z } from 'zod';
 import { ENV } from '../config/env';
+import { interact, isGeminiConfigured } from './geminiClient';
 import { logger } from '../utils/logger';
 
 export interface TranscriptionResult {
+  /** Transcribed text; '' when the audio contained no recognisable speech; null when unavailable. */
   text: string | null;
   language: 'en' | 'te' | 'hi';
   source: 'gemini' | 'unavailable';
-  message?: string;
+  noSpeech?: boolean;
 }
 
-const transcriptionSchema = z.object({
-  text: z.string().min(1),
-  language: z.enum(['en', 'te', 'hi']).default('en'),
-});
+/** Script-based language guess for the transcript (Telugu / Devanagari / otherwise English). */
+export const detectLanguage = (text: string): 'en' | 'te' | 'hi' => {
+  const te = (text.match(/[ఀ-౿]/g) ?? []).length;
+  const hi = (text.match(/[ऀ-ॿ]/g) ?? []).length;
+  if (te === 0 && hi === 0) return 'en';
+  return te >= hi ? 'te' : 'hi';
+};
 
+/**
+ * Speech to text with Gemini's dedicated transcription model (language auto-detected, 85+ languages).
+ * If the service fails, the result is "unavailable" - a transcript is never fabricated.
+ */
 export class TranscriptionService {
-  /**
-   * Transcribes voice audio into text using Gemini 1.5 Flash audio capability
-   * If Gemini API is unavailable or fails, returns source: 'unavailable' honestly.
-   */
-  static async transcribeAudio(filePath: string, mimeType: string): Promise<TranscriptionResult> {
-    if (!ENV.GEMINI_API_KEY || ENV.GEMINI_API_KEY.trim() === '') {
-      return {
-        text: null,
-        language: 'en',
-        source: 'unavailable',
-        message: 'Voice transcription service is currently unavailable without an active Gemini API key. Audio has been securely attached.',
-      };
-    }
-
+  static async transcribe(audio: Buffer, mimeType: string): Promise<TranscriptionResult> {
+    if (!isGeminiConfigured()) return { text: null, language: 'en', source: 'unavailable' };
     try {
-      const audioBuffer = fs.readFileSync(filePath);
-      const genAI = new GoogleGenerativeAI(ENV.GEMINI_API_KEY);
-      const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-
-      const prompt = `Transcribe this citizen civic grievance audio accurately.
-The speaker may speak in English, Telugu, or Hindi.
-Return ONLY raw JSON with no markdown formatting:
-{
-  "text": "the verbatim transcription of the grievance",
-  "language": "en" | "te" | "hi"
-}`;
-
-      const contents = [
-        prompt,
+      const res = await interact(
         {
-          inlineData: {
-            data: audioBuffer.toString('base64'),
-            mimeType: mimeType || 'audio/webm',
-          },
+          model: ENV.GEMINI_TRANSCRIBE_MODEL,
+          input: [{ type: 'audio', data: audio.toString('base64'), mime_type: mimeType }],
+          generation_config: { transcription_config: { language_codes: [] } },
         },
-      ];
-
-      // 10s timeout
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Transcription request timed out')), 10000)
+        Math.max(ENV.GEMINI_TIMEOUT_MS, 40_000),
       );
-
-      const apiCall = model.generateContent(contents);
-      const result: any = await Promise.race([apiCall, timeoutPromise]);
-      const responseText = result.response.text();
-
-      const cleanJson = responseText.replace(/```json/gi, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleanJson);
-      const validated = transcriptionSchema.parse(parsed);
-
-      return {
-        text: validated.text,
-        language: validated.language,
-        source: 'gemini',
-      };
+      const text = String(res.output_text ?? '').trim().slice(0, 2000);
+      return { text, language: detectLanguage(text), source: 'gemini', noSpeech: text.length === 0 };
     } catch (err: any) {
-      logger.warn(`Voice transcription error: ${err.message}`);
-      return {
-        text: null,
-        language: 'en',
-        source: 'unavailable',
-        message: 'Voice transcription service encountered a temporary error. The audio has been attached for administrative review.',
-      };
+      logger.warn(`Transcription unavailable: ${String(err?.message ?? err).slice(0, 200)}`);
+      return { text: null, language: 'en', source: 'unavailable' };
     }
   }
 }

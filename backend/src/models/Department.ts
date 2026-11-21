@@ -1,26 +1,26 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export interface IDepartment extends Document {
-  name: string;
   code: string;
+  name: string;
+  authority: 'GHMC' | 'HMWSSB' | 'TSSPDCL' | 'OTHER';
   description: string;
-  contactEmail: string;
-  assignedComplaintsCount: number;
+  categories: string[];
+  isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const departmentSchema = new Schema<IDepartment>(
+const schema = new Schema<IDepartment>(
   {
-    name: { type: String, required: true, trim: true },
     code: { type: String, required: true, unique: true, uppercase: true, trim: true },
-    description: { type: String, required: true },
-    contactEmail: { type: String, required: true, lowercase: true, trim: true },
-    assignedComplaintsCount: { type: Number, default: 0 },
+    name: { type: String, required: true, trim: true, maxlength: 120 },
+    authority: { type: String, enum: ['GHMC', 'HMWSSB', 'TSSPDCL', 'OTHER'], default: 'OTHER' },
+    description: { type: String, default: '', maxlength: 400 },
+    categories: [String],
+    isActive: { type: Boolean, default: true },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true },
 );
 
-export const Department = mongoose.model<IDepartment>('Department', departmentSchema);
+export const Department = mongoose.model<IDepartment>('Department', schema);

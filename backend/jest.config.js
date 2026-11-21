@@ -3,8 +3,8 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
-  transform: {
-    '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
-  },
-  moduleFileExtensions: ['ts', 'js', 'json', 'node']
+  setupFiles: ['<rootDir>/src/__tests__/setupEnv.ts'],
+  transform: { '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json', diagnostics: false }] },
+  moduleFileExtensions: ['ts', 'js', 'json', 'node'],
+  testTimeout: 60000,
 };

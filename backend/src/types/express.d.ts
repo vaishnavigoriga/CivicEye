@@ -1,9 +1,12 @@
-import { TokenPayload } from '../utils/jwt';
+import { IUser } from '../models/User';
 
 declare global {
   namespace Express {
     interface Request {
-      user?: TokenPayload;
+      /** Set by authenticate / optionalAuth. Always loaded from the database, never trusted from the token. */
+      user?: IUser;
     }
   }
 }
+
+export {};

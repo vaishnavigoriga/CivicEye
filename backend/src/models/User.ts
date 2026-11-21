@@ -7,22 +7,22 @@ export interface IUser extends Document {
   role: 'citizen' | 'admin';
   phone?: string;
   preferredLanguage: 'en' | 'te' | 'hi';
+  isActive: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
 
-const userSchema = new Schema<IUser>(
+const schema = new Schema<IUser>(
   {
-    name: { type: String, required: true, trim: true },
-    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    name: { type: String, required: true, trim: true, maxlength: 80 },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true, maxlength: 254 },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: ['citizen', 'admin'], default: 'citizen' },
-    phone: { type: String, trim: true },
+    phone: { type: String, trim: true, maxlength: 20 },
     preferredLanguage: { type: String, enum: ['en', 'te', 'hi'], default: 'en' },
+    isActive: { type: Boolean, default: true },
   },
-  {
-    timestamps: true,
-  }
+  { timestamps: true },
 );
 
-export const User = mongoose.model<IUser>('User', userSchema);
+export const User = mongoose.model<IUser>('User', schema);

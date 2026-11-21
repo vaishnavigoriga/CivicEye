@@ -1,90 +1,40 @@
 import multer from 'multer';
-import path from 'path';
-import fs from 'fs';
-import { v4 as uuidv4 } from 'uuid';
-import { Request } from 'express';
+import { NextFunction, Request, Response } from 'express';
+import { ENV } from '../config/env';
+import { AppError } from '../utils/errors';
+import { DetectedFile, detectFileType } from '../utils/fileType';
 
-// Ensure upload folders exist
-const UPLOAD_ROOT = path.resolve(__dirname, '../../uploads');
-const DIRS = ['images', 'audio', 'evidence'].map((dir) => path.join(UPLOAD_ROOT, dir));
-DIRS.forEach((dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+/** Files are held in memory, validated by content, and only then written to disk by StorageService. */
+const uploader = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: ENV.MAX_UPLOAD_BYTES, files: 2 },
 });
 
-// Allowed MIME types and extensions
-const ALLOWED_IMAGES = {
-  mimes: ['image/jpeg', 'image/png', 'image/webp'],
-  exts: ['.jpg', '.jpeg', '.png', '.webp'],
+export const uploadFields = (fields: { name: string; kind: 'image' | 'audio' }[]) => uploader.fields(fields.map((f) => ({ name: f.name, maxCount: 1 })));
+export const uploadSingle = (name: string) => uploader.single(name);
+
+export interface ValidatedUpload {
+  buffer: Buffer;
+  detected: DetectedFile;
+}
+
+/** Reads a multer file and verifies it really is the expected kind of file. */
+export const validateUpload = (file: Express.Multer.File | undefined, kind: 'image' | 'audio'): ValidatedUpload | null => {
+  if (!file) return null;
+  const detected = detectFileType(file.buffer);
+  if (!detected || detected.kind !== kind) {
+    throw new AppError(400, 'FILE_INVALID', kind === 'image' ? 'The image must be a JPG, PNG or WebP file.' : 'The audio must be a WebM, OGG, WAV, MP3 or MP4 file.');
+  }
+  return { buffer: file.buffer, detected };
 };
 
-const ALLOWED_AUDIO = {
-  mimes: ['audio/webm', 'audio/ogg', 'audio/wav', 'audio/mp4', 'audio/mpeg'],
-  exts: ['.webm', '.ogg', '.wav', '.mp4', '.mp3'],
+export const getFile = (req: Request, name: string): Express.Multer.File | undefined => {
+  const files = req.files as Record<string, Express.Multer.File[]> | undefined;
+  return files?.[name]?.[0] ?? req.file;
 };
 
-// Forbidden executable extensions
-const EXECUTABLE_EXTS = ['.exe', '.bat', '.sh', '.php', '.phtml', '.js', '.ts', '.py', '.cmd', '.vbs', '.msi'];
-
-const storage = multer.diskStorage({
-  destination: (req: Request, file: Express.Multer.File, cb) => {
-    let folder = 'images';
-    if (file.fieldname === 'audio' || file.mimetype.startsWith('audio/')) {
-      folder = 'audio';
-    } else if (file.fieldname === 'evidence') {
-      folder = 'evidence';
-    }
-    cb(null, path.join(UPLOAD_ROOT, folder));
-  },
-  filename: (req: Request, file: Express.Multer.File, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    // Safety check: Discard original name completely, assign random UUID
-    const safeFilename = `${uuidv4()}${ext || ''}`;
-    cb(null, safeFilename);
-  },
-});
-
-const fileFilter = (req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
-  const ext = path.extname(file.originalname).toLowerCase();
-
-  // Strict check: Block any executable extension immediately
-  if (EXECUTABLE_EXTS.includes(ext)) {
-    return cb(new Error('Executable file uploads are strictly forbidden.'));
-  }
-
-  const isImageField = file.fieldname === 'image' || file.fieldname === 'evidence' || file.fieldname === 'media';
-  const isAudioField = file.fieldname === 'audio';
-
-  if (isImageField) {
-    if (ALLOWED_IMAGES.mimes.includes(file.mimetype) && ALLOWED_IMAGES.exts.includes(ext)) {
-      return cb(null, true);
-    }
-    return cb(new Error('Invalid image format. Allowed: JPG, PNG, WEBP.'));
-  }
-
-  if (isAudioField) {
-    if (ALLOWED_AUDIO.mimes.includes(file.mimetype) || ALLOWED_AUDIO.exts.includes(ext)) {
-      return cb(null, true);
-    }
-    return cb(new Error('Invalid audio format. Allowed: WEBM, OGG, WAV, MP4, MP3.'));
-  }
-
-  // General fallback for multi-uploads
-  if (
-    ALLOWED_IMAGES.mimes.includes(file.mimetype) ||
-    ALLOWED_AUDIO.mimes.includes(file.mimetype)
-  ) {
-    return cb(null, true);
-  }
-
-  return cb(new Error(`Unsupported file type: ${file.mimetype}`));
+/** Guard so a route that requires a file fails clearly when none was sent. */
+export const requireFile = (name: string) => (req: Request, _res: Response, next: NextFunction) => {
+  if (!getFile(req, name)) return next(new AppError(400, 'FILE_INVALID', 'A file is required.'));
+  next();
 };
-
-export const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024, // 10 MB maximum
-  },
-});

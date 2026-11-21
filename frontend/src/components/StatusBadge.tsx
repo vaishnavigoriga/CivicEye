@@ -1,39 +1,26 @@
 import React from 'react';
-import { getStatusBadgeInfo } from '../utils/severityColor';
-import { Clock, CheckCircle, RefreshCw, XCircle, ArrowRightCircle } from 'lucide-react';
+import { useLanguage } from '../contexts/LanguageContext';
+import { statusKey } from '../i18n';
 
-interface StatusBadgeProps {
-  status: string;
-  size?: 'sm' | 'md';
-}
+const STYLES: Record<string, string> = {
+  submitted: 'bg-slate-100 text-slate-800 border-slate-300',
+  under_review: 'bg-amber-50 text-amber-900 border-amber-300',
+  assigned: 'bg-indigo-50 text-indigo-900 border-indigo-300',
+  in_progress: 'bg-blue-50 text-blue-900 border-blue-300',
+  resolved: 'bg-emerald-50 text-emerald-900 border-emerald-300',
+  rejected: 'bg-rose-50 text-rose-900 border-rose-300',
+};
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, size = 'md' }) => {
-  const info = getStatusBadgeInfo(status);
-
-  const getIcon = () => {
-    switch (status) {
-      case 'resolved':
-        return <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />;
-      case 'in-progress':
-        return <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin" />;
-      case 'assigned':
-        return <ArrowRightCircle className="w-3.5 h-3.5 text-purple-600" />;
-      case 'rejected':
-        return <XCircle className="w-3.5 h-3.5 text-rose-600" />;
-      case 'pending':
-      default:
-        return <Clock className="w-3.5 h-3.5 text-amber-600" />;
-    }
-  };
-
+export const StatusBadge: React.FC<{ status: string; size?: 'sm' | 'md' }> = ({ status, size = 'md' }) => {
+  const { t } = useLanguage();
+  const key = statusKey(status);
   return (
     <span
-      className={`inline-flex items-center gap-1.5 font-semibold rounded-full border ${info.bg} ${
-        size === 'sm' ? 'px-2 py-0.5 text-[10px]' : 'px-2.5 py-1 text-xs'
+      className={`inline-flex items-center rounded border font-medium ${STYLES[key]} ${
+        size === 'sm' ? 'px-1.5 py-0.5 text-[11px]' : 'px-2 py-0.5 text-xs'
       }`}
     >
-      {getIcon()}
-      <span>{info.label}</span>
+      {t.status[key]}
     </span>
   );
 };

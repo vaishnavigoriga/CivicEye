@@ -7,16 +7,20 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "seed": "tsx src/services/seedService.ts",
-    "test": "jest --detectOpenHandles --forceExit"
+    "seed": "tsx src/scripts/seedDemo.ts",
+    "test": "jest --detectOpenHandles --forceExit",
+    "create-admin": "tsx src/scripts/createAdmin.ts",
+    "ai:smoke": "tsx src/scripts/aiSmoke.ts",
+    "import:aggregate": "tsx src/scripts/importAggregate.ts"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
+    "@google/genai": "^3.6.1",
     "bcryptjs": "^2.4.3",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
+    "express-rate-limit": "^7.5.1",
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.9.5",

@@ -6,45 +6,46 @@
   html {
     color-scheme: light;
   }
-
   body {
-    @apply font-sans antialiased bg-slate-50 text-slate-900 selection:bg-civic-700 selection:text-white;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    @apply font-sans antialiased bg-slate-50 text-slate-900;
+    line-height: 1.6;
   }
-
-  h1, h2, h3, h4, h5, h6 {
-    @apply tracking-tight font-bold text-slate-900;
+  h1, h2, h3, h4 {
+    @apply font-semibold text-slate-900;
+    line-height: 1.3;
+  }
+  :focus-visible {
+    @apply outline-none ring-2 ring-civic-600 ring-offset-2;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * {
+      transition: none !important;
+      animation: none !important;
+    }
   }
 }
 
-/* Leaflet map styles */
 .leaflet-container {
   font-family: inherit !important;
-  z-index: 10;
+  z-index: 0;
 }
-
 .custom-leaflet-marker {
   background: transparent !important;
   border: none !important;
 }
-
-/* Tabular figures for IDs, scores, and timestamps */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Clean minimal scrollbars */
-::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+html[lang='te'] body,
+html[lang='hi'] body {
+  line-height: 1.75;
 }
-::-webkit-scrollbar-track {
-  background: #f1f5f9;
-}
-::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #94a3b8;
+html[lang='te'] h1,
+html[lang='te'] h2,
+html[lang='te'] h3,
+html[lang='hi'] h1,
+html[lang='hi'] h2,
+html[lang='hi'] h3 {
+  line-height: 1.55;
 }
