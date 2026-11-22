@@ -1,14 +1,74 @@
 # CivicEye
 
-A civic grievance reporting and tracking prototype for the Greater Hyderabad region.
+**An AI-assisted civic grievance reporting and tracking platform for Hyderabad, built to be honest about what it knows.**
+
 Citizens report problems (potholes, garbage, drainage, water leaks, streetlights, exposed wires, damaged
-infrastructure, waterlogging) with text, photos or voice. AI helps classify and prioritise each report, and
-administrators verify, assign and resolve it. Every step is recorded and visible on a public tracking page.
+infrastructure, waterlogging) with text, photos or voice in English, Telugu or Hindi. Gemini helps classify and
+prioritise each report, administrators verify, assign and resolve it, and every step is visible on a public tracking page.
+
+Built by **Vaishnavi Goriga** as a hackathon and portfolio project.
 
 > **This is an independent prototype.** It is not run by, or connected to, GHMC, HMWSSB, TSSPDCL or any
 > government body. Reports made in CivicEye are **not** forwarded to any department. Records labelled
 > **DEMO DATA** are fictional. The priority score is a **prototype model**, not an official standard.
 > No official complaint data is imported. See [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) for why.
+
+## The problem
+
+Reporting a civic problem is easy to start and hard to follow up: you rarely learn whether anyone saw it, whether
+ten neighbours reported the same pothole, or what happened next. Reports in regional languages and voice notes are
+harder still to triage at scale.
+
+## The approach
+
+- **One place to report and follow up.** Text, photo, voice and a map pin in a three-step form, then a public
+  tracking page with a timeline, assigned department and resolution evidence.
+- **AI as an assistant, never the authority.** Gemini suggests a category, safety risks, department and priority.
+  Administrators verify or correct it. The final score is computed by the backend with a transparent, configurable
+  formula.
+- **Duplicates are linked, never deleted.** Nearby, similar reports (Haversine distance + multilingual text
+  similarity) are grouped. Citizens can support an existing report or submit anyway; admins confirm or reject.
+- **Honest by design.** Every record has a provenance (`CITIZEN`, `DEMO`, `IMPORTED_OFFICIAL`). Demo data is always
+  labelled and excluded from statistics by default. Simulated or failed AI results are labelled as such. When I
+  looked for official complaint data I found none that was usable, so the app shows none instead of inventing any.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/01-home.png" alt="Home page"><br><sub><b>Home:</b> clear scope and prototype notice</sub></td>
+    <td width="50%"><img src="docs/screenshots/09-home-telugu.png" alt="Home page in Telugu"><br><sub><b>Telugu, Hindi and English</b> across the whole interface</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/02-explore.png" alt="Explore complaints"><br><sub><b>Explore:</b> search, filters, priority sorting</sub></td>
+    <td><img src="docs/screenshots/04-map.png" alt="Hyderabad map"><br><sub><b>Map:</b> OpenStreetMap, priority colours, demo records as hollow rings</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/03-track-timeline.png" alt="Tracking page"><br><sub><b>Tracking:</b> public timeline, AI label, listen and translate</sub></td>
+    <td><img src="docs/screenshots/05-analytics.png" alt="Public analytics"><br><sub><b>Analytics:</b> computed from the database, with a data-composition panel</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/07-admin-complaint.png" alt="Admin complaint view"><br><sub><b>Admin:</b> AI suggestion beside administrator decisions, score breakdown, history</sub></td>
+    <td><img src="docs/screenshots/08-admin-duplicates.png" alt="Admin duplicate review"><br><sub><b>Duplicate review:</b> confirm or reject, nothing is deleted</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/06-admin-dashboard.png" alt="Admin dashboard"><br><sub><b>Admin dashboard:</b> workload and highest-priority open reports</sub></td>
+    <td><img src="docs/screenshots/10-mobile-track.png" alt="Mobile tracking page" width="220"><br><sub><b>Mobile:</b> responsive layout</sub></td>
+  </tr>
+</table>
+
+Screenshots show fictional sample reports on a local demo database.
+
+## Engineering highlights
+
+- **Full stack, typed end to end:** React + Vite + TypeScript + Tailwind; Express + TypeScript + Mongoose; Zod validation on every route.
+- **Real AI integration, handled carefully:** structured JSON output validated twice (JSON Schema + Zod), complaint text treated as untrusted data,
+  timeouts and retries, honest failure states, plus speech-to-text, text-to-speech and translation. A live check script (`npm run ai:smoke`) verifies all of it.
+- **Security-minded:** HttpOnly cookie sessions with role re-checked per request, bcrypt, rate limiting, content-based upload validation,
+  private voice recordings, strict CORS, no reporter identity in any public response.
+- **Tested:** Jest + Supertest API tests (including privacy, authorization and the admin workflow) and Vitest frontend tests. A test keeps
+  [docs/openapi.yaml](docs/openapi.yaml) in sync with the real routes, and another fails if a Telugu or Hindi string is missing.
+- **Documented:** API reference and OpenAPI spec, as-built architecture, a data-source research report, and a demo script.
 
 ## Features
 
