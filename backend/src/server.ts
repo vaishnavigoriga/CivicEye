@@ -28,11 +28,14 @@ app.disable('x-powered-by');
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
 
-// Strict CORS: only the configured frontend origin may make credentialed requests.
-const allowedOrigins = new Set([ENV.FRONTEND_URL]);
+// Strict CORS: only configured frontend origins (FRONTEND_URL, comma-separated) may make credentialed requests.
+// In development only, any localhost / 127.0.0.1 port is also accepted, because Vite moves to the next free
+// port (5174, 5175, ...) when 5173 is busy. This is never enabled in production.
+const allowedOrigins = new Set(ENV.FRONTEND_URL.split(',').map((o) => o.trim()).filter(Boolean));
+const isLocalDevOrigin = (o: string) => ENV.NODE_ENV === 'development' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(o);
 app.use(
   cors({
-    origin: (origin, cb) => cb(null, !origin || allowedOrigins.has(origin)),
+    origin: (origin, cb) => cb(null, !origin || allowedOrigins.has(origin) || isLocalDevOrigin(origin)),
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type'],
