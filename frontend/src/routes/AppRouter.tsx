@@ -15,6 +15,8 @@ import { ComplaintDetailPage } from '../pages/ComplaintDetailPage';
 import { ProfilePage } from '../pages/ProfilePage';
 import { AdminDashboardPage } from '../pages/AdminDashboardPage';
 import { AdminComplaintsPage } from '../pages/AdminComplaintsPage';
+import { NotFoundPage } from '../pages/NotFoundPage';
+import { AdminComplaintDetailPage } from '../pages/AdminComplaintDetailPage';
 import { AdminDuplicatesPage } from '../pages/AdminDuplicatesPage';
 import { AdminDepartmentsPage } from '../pages/AdminDepartmentsPage';
 import { Loader2 } from 'lucide-react';
@@ -115,6 +117,14 @@ export const AppRouter: React.FC = () => {
         }
       />
       <Route
+        path="/admin/complaints/:trackingId"
+        element={
+          <AdminRoute>
+            <AdminComplaintDetailPage />
+          </AdminRoute>
+        }
+      />
+      <Route
         path="/admin/duplicates"
         element={
           <AdminRoute>
@@ -132,7 +142,7 @@ export const AppRouter: React.FC = () => {
       />
 
       {/* Catch-all */}
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 };

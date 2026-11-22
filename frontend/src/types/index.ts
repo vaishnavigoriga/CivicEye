@@ -85,8 +85,6 @@ export interface Department {
   name: string;
   code: string;
   description: string;
-  contactEmail?: string;
-  assignedComplaintsCount?: number;
 }
 
 export interface DuplicateCandidate {
@@ -142,4 +140,62 @@ export interface DataSources {
   officialComplaintDataAvailable: boolean;
   datasets: OfficialDataset[];
   researchedOn: string;
+}
+
+// ---------- Administrator views (only returned to administrators)
+
+export interface AdminComplaint extends Complaint {
+  reporter: { id: string; name?: string; email?: string; phone?: string };
+  aiFull: {
+    status: 'ok' | 'fallback' | 'failed';
+    isSimulated: boolean;
+    model?: string;
+    category?: ComplaintCategory;
+    keywords: string[];
+    safetyRisks: string[];
+    publicImpact?: string;
+    suggestedDepartment?: string;
+    suggestedPriority?: PriorityBand;
+    explanation?: string;
+    severityFactors?: { safetyRisk?: string; affectedPopulation?: string; infrastructureDamage?: string };
+    confidence?: number;
+  };
+  verified?: { category?: ComplaintCategory; verifiedAt?: string };
+  transcript?: { text: string; language: Language; editedByUser: boolean };
+  duplicateGroupId?: string;
+  priority: Complaint['priority'] & { factors: { safety: number; affected: number; evidence: number; duration: number } };
+}
+
+export interface AdminUpdate {
+  id: string;
+  type: 'submitted' | 'status' | 'assignment' | 'comment' | 'verification' | 'evidence' | 'duplicate_review';
+  fromStatus?: string;
+  toStatus?: string;
+  note: string;
+  isPublic: boolean;
+  actorRole: 'citizen' | 'admin' | 'system';
+  actor?: { id: string; name: string };
+  createdAt: string;
+}
+
+export interface AdminDepartment {
+  _id: string;
+  code: string;
+  name: string;
+  authority: 'GHMC' | 'HMWSSB' | 'TSSPDCL' | 'OTHER';
+  description: string;
+  categories: ComplaintCategory[];
+  isActive: boolean;
+}
+
+export interface DuplicateGroupView {
+  id: string;
+  status: 'suggested' | 'confirmed' | 'rejected';
+  maxScore: number;
+  members: Complaint[];
+}
+
+export interface Workload {
+  departments: { id: string; code: string; name: string; assigned: number; inProgress: number; resolved: number; open: number }[];
+  unassigned: number;
 }

@@ -52,7 +52,7 @@ export const publicComplaint = (c: IComplaint, opts: { hasSupported?: boolean } 
 export const ownerComplaint = (c: IComplaint) => ({
   ...publicComplaint(c),
   audio: c.media.filter((m) => m.kind === 'audio').map((m) => ({ url: m.url })),
-  transcript: c.transcript,
+  transcript: c.transcript?.text ? c.transcript : undefined,
 });
 
 export const publicUpdate = (u: IComplaintUpdate) => ({

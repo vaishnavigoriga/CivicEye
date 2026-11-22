@@ -6,6 +6,7 @@ import { ToastProvider } from './contexts/ToastContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { AppRouter } from './routes/AppRouter';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export const App: React.FC = () => (
   <BrowserRouter>
@@ -15,7 +16,9 @@ export const App: React.FC = () => (
           <div className="min-h-screen flex flex-col">
             <Navbar />
             <main id="main" className="flex-grow">
-              <AppRouter />
+              <ErrorBoundary>
+                <AppRouter />
+              </ErrorBoundary>
             </main>
             <Footer />
           </div>

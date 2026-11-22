@@ -126,6 +126,7 @@ describe('citizen complaint flow', () => {
     expect(c.priority.score).toBeGreaterThanOrEqual(1);
     expect(c.location.accuracy).toBe('map_pin');
     expect(c.images[0].url).toMatch(/^\/uploads\/images\//);
+    expect(c.transcript).toBeUndefined(); // no empty transcript object for non-voice reports
 
     const detail = await request(app).get(`${API}/complaints/${c.trackingId}`);
     expect(detail.status).toBe(200);

@@ -123,12 +123,12 @@ export const ComplaintDetailPage: React.FC = () => {
         <div className="lg:col-span-2 space-y-6">
           <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <span className="font-mono text-sm">{c.trackingId}</span>
+              <h1 className="font-mono text-sm font-semibold">{c.trackingId}</h1>
               <StatusBadge status={c.status} />
               <ProvenanceBadge source={c.provenance} size="md" />
             </div>
             {c.provenance === 'DEMO' && <Alert variant="warning">{t.provenance.demoHint}</Alert>}
-            {!c.description.startsWith(c.title.replace(/\.\.\.$/, '')) && <h1 className="text-xl font-semibold">{c.title}</h1>}
+            {!c.description.startsWith(c.title.replace(/\.\.\.$/, '')) && <h2 className="text-xl font-semibold">{c.title}</h2>}
             <p className="whitespace-pre-wrap text-slate-800">{c.description}</p>
             {c.language !== language && (
               <div className="space-y-2">

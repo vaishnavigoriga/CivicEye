@@ -1,473 +1,170 @@
 import React, { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { adminApi } from '../api/adminApi';
+import { Pagination } from '../api/complaintsApi';
+import { AdminComplaint, AdminDepartment, CATEGORIES, STATUSES } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
+import { fmt } from '../i18n';
+import { errorMessage } from '../utils/errorMessage';
+import { formatDate } from '../utils/formatDate';
+import { AdminShell } from '../components/AdminShell';
+import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { SeverityBadge } from '../components/SeverityBadge';
-import { useToast } from '../contexts/ToastContext';
-import { Breadcrumb } from '../components/ui/Breadcrumb';
+import { ProvenanceBadge } from '../components/ProvenanceBadge';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
-import {
-  Search,
-  Filter,
-  CheckCircle2,
-  ArrowRight,
-  Upload,
-  Building2,
-  Loader2,
-  Camera,
-  FileText,
-  ShieldCheck,
-  X
-} from 'lucide-react';
-
-const CATEGORIES = [
-  'All',
-  'Roads',
-  'Drainage',
-  'Electricity',
-  'Water Supply',
-  'Sanitation',
-  'Street Lights',
-  'Parks',
-  'Other',
-];
+import { Select } from '../components/ui/Field';
+import { Alert } from '../components/ui/Alert';
 
 export const AdminComplaintsPage: React.FC = () => {
-  const { showToast } = useToast();
-  const [complaints, setComplaints] = useState<any[]>([]);
-  const [departments, setDepartments] = useState<any[]>([]);
+  const { t } = useLanguage();
+  const [items, setItems] = useState<AdminComplaint[]>([]);
+  const [pagination, setPagination] = useState<Pagination>({ total: 0, page: 1, limit: 20, totalPages: 1 });
+  const [departments, setDepartments] = useState<AdminDepartment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  // Filters
-  const [status, setStatus] = useState('All');
-  const [category, setCategory] = useState('All');
   const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const [category, setCategory] = useState('');
+  const [departmentId, setDepartmentId] = useState('');
   const [provenance, setProvenance] = useState<'all' | 'citizen' | 'demo'>('all');
-
-  // Modals state
-  const [selectedComplaint, setSelectedComplaint] = useState<any | null>(null);
-  const [newStatus, setNewStatus] = useState('in-progress');
-  const [statusNote, setStatusNote] = useState('');
-  const [selectedDeptId, setSelectedDeptId] = useState('');
-  const [deptNote, setDeptNote] = useState('');
-  const [actionLoading, setActionLoading] = useState(false);
-
-  // Evidence upload modal state
-  const [evidenceModalComplaint, setEvidenceModalComplaint] = useState<any | null>(null);
-  const [evidenceCaption, setEvidenceCaption] = useState('');
-  const [evidenceFile, setEvidenceFile] = useState<File | null>(null);
-  const [uploadingEvidence, setUploadingEvidence] = useState(false);
-
-  const fetchComplaints = async () => {
-    setLoading(true);
-    try {
-      const [compRes, deptRes] = await Promise.all([
-        adminApi.getAllComplaints({ status, category, search, limit: 50 }),
-        adminApi.getDepartments(),
-      ]);
-      setComplaints(compRes.complaints || []);
-      setDepartments(deptRes || []);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to fetch complaints', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const [unassigned, setUnassigned] = useState(false);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+  const [sort, setSort] = useState<'newest' | 'priority'>('priority');
+  const [page, setPage] = useState(1);
 
   useEffect(() => {
-    fetchComplaints();
-  }, [status, category]);
+    adminApi.departments().then(setDepartments).catch(() => undefined);
+  }, []);
 
-  const handleUpdateStatusAndDept = async () => {
-    if (!selectedComplaint) return;
-    setActionLoading(true);
-    try {
-      // If department selected and changed
-      if (selectedDeptId && selectedDeptId !== selectedComplaint.department?._id) {
-        await adminApi.assignDepartment(
-          selectedComplaint._id,
-          selectedDeptId,
-          deptNote || `Department reassigned by municipal admin.`
-        );
-      }
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    adminApi
+      .list({ page, limit: 20, search: query, status, category, departmentId, provenance, unassigned, duplicatesOnly, sort })
+      .then((d) => {
+        if (cancelled) return;
+        setItems(d.items);
+        setPagination(d.pagination);
+      })
+      .catch((e) => !cancelled && setError(errorMessage(e, t)))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, query, status, category, departmentId, provenance, unassigned, duplicatesOnly, sort, reloadKey]);
 
-      // If status changed
-      if (newStatus !== selectedComplaint.status || statusNote) {
-        await adminApi.updateStatus(
-          selectedComplaint._id,
-          newStatus,
-          statusNote || `Status updated to ${newStatus}`
-        );
-      }
-
-      showToast('Grievance dossier updated successfully', 'success');
-      setSelectedComplaint(null);
-      setStatusNote('');
-      setDeptNote('');
-      fetchComplaints();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to update grievance', 'error');
-    } finally {
-      setActionLoading(false);
-    }
+  const reset = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v);
+    setPage(1);
   };
-
-  const handleUploadEvidence = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!evidenceModalComplaint || !evidenceFile) return;
-
-    setUploadingEvidence(true);
-    try {
-      const formData = new FormData();
-      formData.append('evidence', evidenceFile);
-      formData.append('caption', evidenceCaption || 'Official repair completion proof');
-
-      await adminApi.uploadEvidence(evidenceModalComplaint._id, formData);
-      showToast('Photographic completion evidence uploaded!', 'success');
-      setEvidenceModalComplaint(null);
-      setEvidenceFile(null);
-      setEvidenceCaption('');
-      fetchComplaints();
-    } catch (err: any) {
-      showToast(err.message || 'Failed to upload evidence', 'error');
-    } finally {
-      setUploadingEvidence(false);
-    }
-  };
-
-  const filteredComplaints = complaints.filter((c) => {
-    if (provenance === 'citizen') return c.dataSource !== 'fictional_demo';
-    if (provenance === 'demo') return c.dataSource === 'fictional_demo';
-    return true;
-  });
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb items={[{ label: 'Municipal Administration' }, { label: 'All Grievances' }]} />
+    <AdminShell>
+      <PageHeader title={t.admin.navComplaints} subtitle={fmt(t.explore.results, { n: pagination.total })} />
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <h1 className="text-2xl font-bold text-civic-900 tracking-tight">
-            Grievance Redressal Records
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Operational triage console for assigning municipal departments, monitoring status progression, and recording photographic repair completion.
-          </p>
+      <form
+        className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 items-end mb-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setQuery(search.trim());
+        }}
+      >
+        <div className="lg:col-span-2">
+          <Input label={t.common.search} placeholder={t.explore.searchPlaceholder} value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-
-        {/* Search */}
-        <div className="flex items-center gap-2">
-          <div className="relative w-64">
-            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && fetchComplaints()}
-              placeholder="Search keyword or area..."
-              className="w-full h-8 pl-8 pr-3 text-xs rounded-md border border-slate-300 focus:outline-none focus:ring-1 focus:ring-civic-700"
-            />
-          </div>
-          <Button variant="outline" size="sm" onClick={fetchComplaints}>
-            Search
-          </Button>
+        <Select label={t.common.status} value={status} onChange={(e) => reset(setStatus)(e.target.value)}>
+          <option value="">{t.common.all}</option>
+          {STATUSES.map((s) => <option key={s} value={s}>{t.status[s]}</option>)}
+        </Select>
+        <Select label={t.common.category} value={category} onChange={(e) => reset(setCategory)(e.target.value)}>
+          <option value="">{t.common.all}</option>
+          {CATEGORIES.map((c) => <option key={c} value={c}>{t.categories[c]}</option>)}
+        </Select>
+        <Select label={t.common.department} value={departmentId} onChange={(e) => reset(setDepartmentId)(e.target.value)}>
+          <option value="">{t.admin.anyDepartment}</option>
+          {departments.map((d) => <option key={d._id} value={d._id}>{d.code}</option>)}
+        </Select>
+        <Select label={t.admin.records} value={provenance} onChange={(e) => reset(setProvenance)(e.target.value as 'all' | 'citizen' | 'demo')}>
+          <option value="all">{t.admin.provAll}</option>
+          <option value="citizen">{t.admin.provCitizen}</option>
+          <option value="demo">{t.admin.provDemo}</option>
+        </Select>
+        <Select label={t.explore.sort} value={sort} onChange={(e) => reset(setSort)(e.target.value as 'newest' | 'priority')}>
+          <option value="priority">{t.explore.sortPriority}</option>
+          <option value="newest">{t.explore.sortNewest}</option>
+        </Select>
+        <div className="flex flex-wrap items-center gap-4 pb-2 lg:col-span-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={unassigned} onChange={(e) => reset(setUnassigned)(e.target.checked)} />
+            {t.admin.onlyUnassigned}
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={duplicatesOnly} onChange={(e) => reset(setDuplicatesOnly)(e.target.checked)} />
+            {t.admin.onlyDuplicates}
+          </label>
+          <Button type="submit" size="sm">{t.common.search}</Button>
         </div>
-      </div>
+      </form>
 
-      {/* Filter Toolbar */}
-      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-3 rounded-lg border border-slate-200 text-xs">
-        {/* Status filters */}
-        <div className="flex items-center gap-1 overflow-x-auto">
-          {['All', 'pending', 'assigned', 'in-progress', 'resolved'].map((st) => (
-            <button
-              key={st}
-              onClick={() => setStatus(st)}
-              className={`px-2.5 py-1 rounded font-medium capitalize transition-colors ${
-                status === st
-                  ? 'bg-civic-900 text-white'
-                  : 'text-slate-600 hover:bg-slate-100'
-              }`}
-            >
-              {st}
-            </button>
-          ))}
-        </div>
+      {error && (
+        <Alert variant="error">
+          {error} <button className="underline" onClick={() => setReloadKey((k) => k + 1)}>{t.common.retry}</button>
+        </Alert>
+      )}
 
-        {/* Category & Provenance */}
-        <div className="flex items-center gap-2">
-          <select
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            className="h-7 px-2 text-xs rounded border border-slate-300 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-civic-700"
-          >
-            {CATEGORIES.map((c) => (
-              <option key={c} value={c}>
-                {c === 'All' ? 'All Categories' : c}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={provenance}
-            onChange={(e) => setProvenance(e.target.value as any)}
-            className="h-7 px-2 text-xs rounded border border-slate-300 bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-civic-700"
-          >
-            <option value="all">All Provenance</option>
-            <option value="citizen">Verified Citizen Only</option>
-            <option value="demo">Demo Records Only</option>
-          </select>
-        </div>
-      </div>
-
-      {/* Data Table */}
       {loading ? (
-        <div className="py-16 flex flex-col items-center justify-center text-slate-400 gap-2">
-          <Loader2 className="w-6 h-6 animate-spin text-civic-700" />
-          <span className="text-xs">Querying grievance database...</span>
-        </div>
-      ) : filteredComplaints.length === 0 ? (
-        <div className="bg-white rounded-lg border border-slate-200 p-12 text-center max-w-md mx-auto">
-          <FileText className="w-8 h-8 text-slate-400 mx-auto mb-2" />
-          <h3 className="font-semibold text-slate-800 text-sm">No grievances found</h3>
-          <p className="text-xs text-slate-500 mt-1">No records match the current filter parameters.</p>
-        </div>
+        <p className="text-slate-600">{t.common.loading}</p>
+      ) : items.length === 0 && !error ? (
+        <p className="text-slate-700 py-8 text-center">{t.common.noResults}</p>
       ) : (
-        <div className="bg-white rounded-lg border border-slate-200 shadow-xs overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 font-semibold uppercase tracking-wider border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4">Priority</th>
-                  <th className="py-3 px-4">Grievance / Subject</th>
-                  <th className="py-3 px-4">Category</th>
-                  <th className="py-3 px-4">Locality</th>
-                  <th className="py-3 px-4">Assigned Dept</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-slate-600">
+              <tr>
+                <th className="px-3 py-2">{t.common.trackingId}</th>
+                <th className="px-3 py-2">{t.admin.colReport}</th>
+                <th className="px-3 py-2">{t.common.category}</th>
+                <th className="px-3 py-2">{t.common.status}</th>
+                <th className="px-3 py-2">{t.common.priority}</th>
+                <th className="px-3 py-2">{t.common.department}</th>
+                <th className="px-3 py-2">{t.common.reportedOn}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((c) => (
+                <tr key={c.id} className="border-t border-slate-100 align-top">
+                  <td className="px-3 py-2 whitespace-nowrap">
+                    <Link to={`/admin/complaints/${c.trackingId}`} className="font-mono text-xs text-civic-800 underline">{c.trackingId}</Link>
+                    <div className="mt-1"><ProvenanceBadge source={c.provenance} /></div>
+                  </td>
+                  <td className="px-3 py-2 max-w-xs"><span className="line-clamp-2">{c.title}</span><span className="text-xs text-slate-600">{c.location.area}</span></td>
+                  <td className="px-3 py-2">{t.categories[c.category]}{c.categoryVerified && <span className="block text-xs text-emerald-800">✓</span>}</td>
+                  <td className="px-3 py-2"><StatusBadge status={c.status} size="sm" /></td>
+                  <td className="px-3 py-2"><SeverityBadge score={c.priority.score} size="sm" /></td>
+                  <td className="px-3 py-2">{c.department?.code ?? <span className="text-slate-500">{t.admin.unassigned}</span>}</td>
+                  <td className="px-3 py-2 whitespace-nowrap">{formatDate(c.createdAt).split(',')[0]}</td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredComplaints.map((c) => (
-                  <tr key={c._id} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="py-3 px-4">
-                      <SeverityBadge score={c.aiAnalysis?.priorityScore || 50} size="sm" />
-                    </td>
-                    <td className="py-3 px-4 max-w-xs">
-                      <a
-                        href={`/citizen/complaints/${c._id}`}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="font-medium text-slate-900 hover:text-civic-700 line-clamp-1"
-                      >
-                        {c.title}
-                      </a>
-                      <div className="text-[10px] text-slate-400">
-                        CE-{c._id?.slice(-6).toUpperCase()} • {c.dataSource === 'fictional_demo' ? 'Demo Record' : 'Verified Citizen'}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
-                        {c.category}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-slate-600">{c.location?.area}</td>
-                    <td className="py-3 px-4">
-                      {c.department ? (
-                        <span className="font-medium text-teal-800 bg-teal-50 px-2 py-0.5 rounded border border-teal-200">
-                          {c.department.code || c.department.name}
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 italic">Unassigned</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4">
-                      <StatusBadge status={c.status} size="sm" />
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => {
-                          setSelectedComplaint(c);
-                          setNewStatus(c.status);
-                          setSelectedDeptId(c.department?._id || '');
-                        }}
-                      >
-                        Triage / Dept
-                      </Button>
-
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => setEvidenceModalComplaint(c)}
-                      >
-                        <Camera className="w-3 h-3 mr-1 text-teal-700" />
-                        <span>Evidence</span>
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* Triage & Department Assignment Modal */}
-      {selectedComplaint && (
-        <Modal
-          isOpen={true}
-          onClose={() => setSelectedComplaint(null)}
-          title="Triage & Department Assignment"
-          maxWidth="md"
-        >
-          <div className="space-y-4">
-            <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs">
-              <div className="font-semibold text-slate-900">{selectedComplaint.title}</div>
-              <div className="text-slate-500 mt-0.5">
-                {selectedComplaint.location.area} • Category: {selectedComplaint.category}
-              </div>
-            </div>
-
-            {/* Department Selection */}
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Assign Municipal Department
-              </label>
-              <select
-                value={selectedDeptId}
-                onChange={(e) => setSelectedDeptId(e.target.value)}
-                className="w-full h-8 text-xs rounded border border-slate-300 px-2 bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-civic-700"
-              >
-                <option value="">Select Responsible Department...</option>
-                {departments.map((d) => (
-                  <option key={d._id} value={d._id}>
-                    {d.name} ({d.code})
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Lifecycle Status Update */}
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Update Grievance Lifecycle Status
-              </label>
-              <select
-                value={newStatus}
-                onChange={(e) => setNewStatus(e.target.value)}
-                className="w-full h-8 text-xs rounded border border-slate-300 px-2 bg-white text-slate-800 focus:outline-none focus:ring-1 focus:ring-civic-700 capitalize"
-              >
-                <option value="pending">Pending Review</option>
-                <option value="assigned">Assigned to Department</option>
-                <option value="in-progress">In Progress (Field Crews Dispatched)</option>
-                <option value="resolved">Resolved (Completed)</option>
-              </select>
-            </div>
-
-            {/* Officer Audit Note */}
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Official Operational Note (Recorded in Public Audit Trail)
-              </label>
-              <textarea
-                rows={2}
-                value={statusNote}
-                onChange={(e) => setStatusNote(e.target.value)}
-                placeholder="e.g., Work order dispatched to Zonal Engineering Team 4 for resurfacing..."
-                className="w-full rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-civic-700"
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSelectedComplaint(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="primary"
-                size="sm"
-                isLoading={actionLoading}
-                onClick={handleUpdateStatusAndDept}
-              >
-                Confirm Updates
-              </Button>
-            </div>
-          </div>
-        </Modal>
+      {pagination.totalPages > 1 && (
+        <div className="flex items-center justify-center gap-4 mt-4">
+          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>{t.common.previous}</Button>
+          <span className="text-sm">{fmt(t.common.pageOf, { page, total: pagination.totalPages })}</span>
+          <Button variant="outline" size="sm" disabled={page >= pagination.totalPages} onClick={() => setPage((p) => p + 1)}>{t.common.next}</Button>
+        </div>
       )}
-
-      {/* Resolution Photographic Evidence Upload Modal */}
-      {evidenceModalComplaint && (
-        <Modal
-          isOpen={true}
-          onClose={() => setEvidenceModalComplaint(null)}
-          title="Upload Resolution Photographic Evidence"
-          maxWidth="md"
-        >
-          <form onSubmit={handleUploadEvidence} className="space-y-4">
-            <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs">
-              <div className="font-semibold text-slate-900">{evidenceModalComplaint.title}</div>
-              <div className="text-slate-500 mt-0.5">
-                Case ID: CE-{evidenceModalComplaint._id?.slice(-6).toUpperCase()} • {evidenceModalComplaint.location.area}
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Completion Photo (JPG, PNG, WEBP - Max 5MB) <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="file"
-                required
-                accept="image/jpeg,image/png,image/webp"
-                onChange={(e) => {
-                  if (e.target.files && e.target.files[0]) {
-                    setEvidenceFile(e.target.files[0]);
-                  }
-                }}
-                className="w-full text-xs text-slate-600 border border-slate-300 rounded p-1.5 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <Input
-                label="Evidence Caption & Verification Details *"
-                placeholder="e.g., Asphalt patch completed by Circle 18 road repair unit"
-                value={evidenceCaption}
-                onChange={(e) => setEvidenceCaption(e.target.value)}
-                required
-              />
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setEvidenceModalComplaint(null)}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                isLoading={uploadingEvidence}
-              >
-                <Upload className="w-3.5 h-3.5 mr-1" />
-                <span>Upload & Verify</span>
-              </Button>
-            </div>
-          </form>
-        </Modal>
-      )}
-    </div>
+    </AdminShell>
   );
 };

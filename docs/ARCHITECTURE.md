@@ -1,87 +1,100 @@
-# CivicEye – Phase 2 Architecture (design only, no code changed)
+# CivicEye architecture (as built)
 
-Status: DRAFT for approval. Prototype; not an official GHMC/HMWSSB system.
+Status: reflects the code at the end of Phase 9. Prototype; not an official GHMC/HMWSSB system.
 
-## 1. Principles
-- Keep the existing structure (routes → controllers → services → models). Replace weak parts, don't rewrite all.
-- Provenance on every record: `CITIZEN`, `DEMO`, `IMPORTED_OFFICIAL`. Public statistics default to `CITIZEN` only.
-- AI output is a *suggestion*; admin-verified values are stored separately.
-- No production credentials in code. No demo-login outside `NODE_ENV=development`.
+## Principles
 
-## 2. Data model (MongoDB / Mongoose)
+- Routes → controllers → services → models. Keep each piece small and explicit.
+- Every record has a **provenance**: `CITIZEN`, `DEMO` or `IMPORTED_OFFICIAL`. Public statistics default to `CITIZEN`.
+- AI output is a **suggestion**, stored apart from administrator-verified decisions. The backend, not the AI,
+  computes the priority score. A failed or simulated analysis is never presented as live.
+- No production credentials in code. No demo login. Administrators are created from environment variables or a script.
 
-**User**: name, email (unique), passwordHash (bcrypt, cost 12), role `citizen|admin`, phone?, preferredLanguage, isActive, createdAt.
+## Components
 
-**Department**: code (unique), name, authority (`GHMC|HMWSSB|TSSPDCL|OTHER`), categories[], isActive.
+```
+React (Vite)  ──HTTP/JSON, cookie session──▶  Express API  ──Mongoose──▶  MongoDB
+  i18n EN/TE/HI                                 │  validation (Zod), rate limits, auth
+  Leaflet, Recharts                             ├─▶ Gemini (server-side only)
+                                                └─▶ local disk: images/evidence (public), audio (private)
+```
 
-**Complaint**
-- trackingId (`CE-HYD-YYYY-NNNNNN`, unique), reporterId, provenance
-- description (original text), language, transcript? {text, language, editedByUser}
-- category (8 civic categories + Other), locationText?, location GeoJSON Point `[lng,lat]`, locationAccuracy `gps|map_pin|area_approx`, area, ward?
-- media[] {kind image|audio, path, mime, size}
-- ai {model, status `ok|fallback|failed`, isSimulated, category, keywords[], safetyRisks[], publicImpact, suggestedDepartment, suggestedPriority, explanation, rawConfidence, analysedAt}
-- verified {category?, departmentId?, verifiedBy?, verifiedAt?}  ← admin decisions
-- scoring {safety, affected, evidence, duration, total, band, modelVersion}
-- status (`submitted|under_review|assigned|in_progress|resolved|rejected`), departmentId?
-- duplicateGroupId?, supportCount
-- timestamps; indexes: trackingId, 2dsphere(location), {status,category,createdAt}, provenance, duplicateGroupId, text index on description.
+The frontend never sees the Gemini key. In development Vite serves the app on :5173 and the API listens on :4000.
 
-**ComplaintUpdate** (replaces embedded timeline + AuditLog): complaintId, actorId, actorRole, type `status|assignment|comment|verification|evidence|duplicate_review`, from, to, note, isPublic, createdAt. Citizens see only `isPublic`.
+## Data model (MongoDB)
 
-**DuplicateGroup**: primaryComplaintId, memberIds[], status `suggested|confirmed|rejected`, reviewedBy?, reviewedAt?, scoreDetails.
+| Collection | Purpose / notable fields |
+|---|---|
+| `User` | `name, email (unique), passwordHash (bcrypt 12), role citizen|admin, phone, preferredLanguage, isActive` |
+| `Complaint` | `trackingId`, `reporterId`, `provenance`, `description` (original language), `category` (reporter's choice, else AI), `location` (GeoJSON point, `accuracy` gps|map_pin|area_approx, area, address), `media[]`, `ai{status, isSimulated, model, category, keywords, safetyRisks, publicImpact, suggestedDepartment, suggestedPriority, explanation, severityFactors, confidence}`, `verified{category, verifiedBy, verifiedAt}`, `scoring{total, band, factors, modelVersion}`, `status`, `departmentId`, `duplicateGroupId`, `supportCount`, `resolutionEvidence[]`, `translations` (cache), `externalSource` |
+| `ComplaintUpdate` | One row per event: `type` (submitted/status/assignment/comment/verification/evidence/duplicate_review), `fromStatus/toStatus`, `note`, `isPublic`, `actorId`, `actorRole`, `createdAt`. This is the status history and audit trail |
+| `DuplicateGroup` | `primaryComplaintId, memberIds, status suggested|confirmed|rejected, maxScore, reviewedBy/At` |
+| `Support` | Unique `(complaintId, userId)` "I am also affected" |
+| `Department` | `code (unique), name, authority, description, categories, isActive` |
+| `Counter` | Atomic sequences for tracking IDs (`CE-HYD-YYYY-NNNNNN`; demo `CE-DEMO-NNNNNN`) |
+| `ImportedDataset`, `ImportedAggregate` | Registry and rows for aggregate official figures (source, licence, retrieval date; `pending_review` until approved) |
 
-**Support**: complaintId, userId (unique pair). Supports a complaint without creating a new one.
+Indexes: `2dsphere` on location; compound indexes on status/category/date, provenance/date, reporter, department,
+duplicate group and score; a text index (with `language_override` moved so `te`/`hi` do not break it).
 
-**ScoringConfig** (single doc, seeded from env): weights {safety, affected, evidence, duration}, band thresholds, version. Disclaimer: prototype model, not an official standard.
+Statuses: `submitted → under_review → assigned → in_progress → resolved | rejected`. Rejecting needs a reason. Every
+change is stored with the acting admin and timestamp.
 
-**ImportedDataset** (for Phase 6): name, source org, URL, licence, retrievedAt, coverage, notes; imported records reference it.
+Categories: Roads, Drainage, Waterlogging, Water Supply, Sanitation, Street Lights, Electricity (exposed wires),
+Public Infrastructure, Other.
 
-## 3. Scoring (configurable, default 0–100)
-`total = 100 × (w_s·safety + w_a·affected + w_e·evidence + w_d·duration)`, each factor 0–1.
-- safety: AI risk level, mapped via a table (e.g. exposed wire = 1.0), category floor.
-- affected: AI estimate (individual/street/neighbourhood/ward) plus support count, capped.
-- evidence: image present and AI-rated severity.
-- duration: days open, saturating.
-Defaults 0.35/0.25/0.20/0.20. Backend computes; AI never supplies the final number.
+## Key behaviours
 
-## 4. Duplicate detection
-Candidates: same category, last 30 days, not rejected/resolved, within 150–300 m by **Haversine** (Mongo `$geoNear` prefilter, Haversine to confirm). Text similarity: Unicode-aware token overlap (works for Telugu/Hindi) plus optional Gemini embedding later. Combined score with time decay. Result: suggestion only; citizen chooses "Support existing" or "Submit anyway"; both preserved; admin confirms/rejects the group.
+**Submission** (`POST /complaints`): validate fields and region → check uploads by content → AI analysis
+(Gemini or labelled simulation) → score → duplicate candidates → persist → write the first public update → link to a
+duplicate group if a candidate exists → return the owner view. AI failure never blocks submission.
 
-## 5. API plan (`/api/v1`, envelope `{success,data,error:{code,message,fields}}`)
+**Scoring** (prototype): `100 × Σ weight·factor` over safety, affected people, evidence severity and time open
+(defaults 0.35/0.25/0.20/0.20, configurable). Safety has a floor for hazardous categories; supports add to the
+affected factor (capped); duration stops when a report is closed. Bands: Critical ≥ 80, High ≥ 60, Medium ≥ 40, Low.
 
-Auth: `POST /auth/register`, `/auth/login`, `/auth/logout`, `GET /auth/me`, `PATCH /auth/me`. httpOnly cookie JWT (8h) + CSRF-safe same-site; rate limited. Admin created via `npm run create-admin` (reads env or prompts).
+**Duplicate detection:** candidates are open, non-demo reports of the same category within `DUPLICATE_RADIUS_METRES`
+(default 200, Haversine), within `DUPLICATE_LOOKBACK_DAYS` (30). Text similarity blends word overlap and character
+trigrams over Unicode tokens (works for Telugu and Hindi); distance and recency scale the score. Output is advisory:
+the citizen can support an existing report or submit anyway, both reports are always kept, and an administrator
+confirms or rejects the group (rejecting only removes the link).
 
-Complaints (public, no PII): `GET /complaints` (filter, search, paginate), `GET /complaints/:trackingId` (public view), `GET /map`, `GET /analytics?…`.
-Citizen: `POST /complaints` (multipart), `POST /complaints/preview-analysis`, `POST /complaints/:id/support`, `GET /me/complaints`.
-Voice: `POST /voice/transcribe` (audio → transcript, editable client-side), `POST /voice/speak` only if TTS spike succeeds.
-Admin: `GET /admin/complaints`, `GET /admin/complaints/:id`, `PATCH …/verify`, `…/status`, `…/assign`, `POST …/comments`, `POST …/evidence`, `GET /admin/duplicates`, `PATCH /admin/duplicates/:id`, `GET /admin/workload`, `/admin/departments` CRUD.
-Docs: OpenAPI file at `docs/openapi.yaml`, served at `/api/docs` in dev.
+**AI (Gemini via `@google/genai`, Interactions API)**: structured JSON output validated by a JSON Schema and again by
+Zod; complaint text is passed as untrusted data; one retry on timeouts/5xx; the key is scrubbed from logs. Separate
+models for analysis/translation, transcription and text-to-speech (all configurable; verified live on 21 Nov 2026).
+Without a key the keyword-based simulation runs and is always labelled.
 
-Cross-cutting: Zod validation per route, central error handler (safe messages), express-rate-limit (auth, uploads, AI endpoints), helmet, strict CORS from `FRONTEND_URL`, uploads checked by magic bytes, private storage for audio (signed/authorized access), escaped search input.
+**Privacy:** public serialisers are allow-lists with no reporter identity, supporter lists, internal notes or admin
+names. Voice recordings are stored outside the static folders and served only to the reporter and admins.
 
-## 6. Gemini integration
-- Server-only; `GEMINI_API_KEY`, `GEMINI_MODEL`, `GEMINI_AUDIO_MODEL` in `.env`.
-- Phase 5 starts by verifying current SDK (`@google/genai`) and model IDs against the official docs and a live ListModels call.
-- Structured output via JSON schema + Zod validation; one retry; on failure store `ai.status=failed` and fall back to a clearly labelled "Simulated" analysis only when `DEMO_AI_FALLBACK=true`.
-- `/health` reports the true AI state.
+**Analytics:** computed with MongoDB aggregations; scope `citizen` or `all`; filters for category, status, area and
+dates; localities come from the data (no hardcoded list); a composition panel shows citizen/demo/imported counts. No
+response-time or resolution-rate figures are produced because verified data does not support them.
 
-## 7. Frontend structure and navigation
-Primary nav (same for everyone): Home · Report an Issue · Explore Complaints · Track Grievance · Hyderabad Map · Public Analytics · About · Login/Register. When logged in, Login/Register becomes an account menu (My Reports, Profile, Logout; Admin Console for admins). Language switcher in the header.
+## Security controls
 
-Pages: Home, Report (3 steps: describe/voice → location/photo → review & AI result), Explore, Track (by ID), Map (map/list toggle), Analytics, About, Auth, My Reports, Admin (Complaints queue, Complaint detail, Duplicates, Workload).
+Zod validation on every route; central error handler with safe messages and error codes; `helmet`; strict CORS
+(one origin, credentials); `HttpOnly` `SameSite=Lax` 8-hour cookie; role and active flag re-read from the database per
+request; bcrypt cost 12; rate limits (general, auth, submit, AI); magic-byte upload validation with random file names;
+body size limits; escaped search input; no static serving of private audio.
 
-i18n: `i18next`-style JSON resources `en/te/hi`, typed keys, every visible string and validation message, persisted in localStorage, `<html lang>` updated, Telugu/Hindi-capable font (Noto Sans Telugu/Devanagari). User content is never auto-translated.
+## Frontend
 
-Design: neutral slate + one civic blue accent, status colours only for status/priority, 8px grid, system-quality typography, no gradients/animations beyond 150ms transitions, WCAG AA contrast. Small shared component set (Button, Field, Badge, Card, Table, Dialog).
+React 18 + Vite + Tailwind. One shell (header navigation: Home, Report an Issue, Explore Complaints, Track
+Grievance, Hyderabad Map, Public Analytics, About, Login/Register; account menu with My Reports, Profile and, for
+admins, Admin Console). `LanguageContext` serves type-checked dictionaries; API errors are translated by code.
+Admin pages share an `AdminShell` with tabs (Dashboard, Complaints, Duplicates, Departments).
 
-## 8. Repository / ops
-- `git init` + baseline commit (awaiting your OK).
-- Remove committed `dist/`, test uploads and `.env` JWT default; `.env.example` with placeholders only.
-- Database: require `MONGO_URI`; in-memory Mongo only via explicit `USE_MEMORY_DB=true` for tests.
-- Demo data: `npm run seed:demo` (opt-in), all records `DEMO`, coordinates labelled `area_approx`, no stock photos, no fake "official" records.
+## Deviations from the Phase 2 plan
 
-## 9. Open decisions for you
-1. Approve the model/API/nav above (or list changes).
-2. OK to `git init` with a baseline commit?
-3. Duplicate radius: 200 m default acceptable?
-4. Should demo-login exist in development at all (as a clearly labelled dev-only button), or should demo users log in with normal credentials?
+- No `ScoringConfig` collection: weights come from environment variables (simpler; versioned by `modelVersion`).
+- The planned OpenAPI route (`/api/docs`) is not served; the spec is `docs/openapi.yaml`, verified against the
+  real routes by a test.
+- Departments hold no contact emails (none are invented).
+- The importer handles **aggregate** official CSVs only, because no record-level dataset exists.
+- Dev demo login was dropped, as agreed.
+
+## Not built
+
+Email/SMS notifications, password reset, push updates, object storage for uploads, multi-tenant or cross-city
+support, an official integration with GHMC/HMWSSB (none exists), and a hosted deployment configuration.

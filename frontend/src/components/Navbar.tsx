@@ -80,7 +80,7 @@ export const Navbar: React.FC = () => {
         {t.nav.skip}
       </a>
       <div className="max-w-6xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
-        <Link to="/" className="flex items-center gap-2 font-semibold text-civic-900 shrink-0">
+        <Link to="/" className="flex items-center gap-2 font-semibold text-civic-900 shrink-0 py-2">
           <Eye className="w-5 h-5 text-civic-700" aria-hidden="true" />
           <span>{t.brand.name}</span>
         </Link>

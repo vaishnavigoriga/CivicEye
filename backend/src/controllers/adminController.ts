@@ -36,7 +36,7 @@ export const commentSchema = z.object({ note: z.string().trim().min(1).max(1000)
 export const evidenceSchema = z.object({ caption: z.string().trim().max(300).default('') });
 export const duplicateReviewSchema = z.object({ decision: z.enum(['confirmed', 'rejected']) });
 export const departmentSchema = z.object({
-  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,24}$/),
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9-]{3,24}$/, 'Use 3 to 24 letters, digits or hyphens'),
   name: z.string().trim().min(3).max(120),
   authority: z.enum(['GHMC', 'HMWSSB', 'TSSPDCL', 'OTHER']).default('OTHER'),
   description: z.string().trim().max(400).default(''),

@@ -1,198 +1,108 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { adminApi } from '../api/adminApi';
-import { Department } from '../types';
+import { AdminDepartment } from '../types';
+import { useLanguage } from '../contexts/LanguageContext';
 import { useToast } from '../contexts/ToastContext';
-import { Breadcrumb } from '../components/ui/Breadcrumb';
+import { errorMessage, fieldErrors } from '../utils/errorMessage';
+import { AdminShell } from '../components/AdminShell';
+import { PageHeader } from '../components/PageHeader';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
 import { Input } from '../components/ui/Input';
-import {
-  Building2,
-  Plus,
-  Loader2,
-  Mail,
-  CheckCircle2,
-  ShieldCheck,
-  Briefcase
-} from 'lucide-react';
+import { Select, TextArea } from '../components/ui/Field';
+import { Alert } from '../components/ui/Alert';
+
+type Draft = Omit<AdminDepartment, '_id'> & { _id?: string };
+const EMPTY: Draft = { code: '', name: '', authority: 'OTHER', description: '', categories: [], isActive: true };
 
 export const AdminDepartmentsPage: React.FC = () => {
+  const { t } = useLanguage();
   const { showToast } = useToast();
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [items, setItems] = useState<AdminDepartment[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
 
-  // New dept modal
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [description, setDescription] = useState('');
-  const [contactEmail, setContactEmail] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-
-  const fetchDepts = async () => {
-    setLoading(true);
-    try {
-      const data = await adminApi.getDepartments();
-      setDepartments(data || []);
-    } catch (err: any) {
-      showToast(err.message || 'Failed to load departments', 'error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    fetchDepts();
+  const load = useCallback(() => {
+    adminApi.departments().then(setItems).catch((e) => setError(errorMessage(e, t)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(load, [load]);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    setSubmitting(true);
+    if (!draft) return;
+    setBusy(true);
+    setErrors({});
     try {
-      await adminApi.createDepartment({ name, code, description, contactEmail });
-      showToast('Department registered successfully', 'success');
-      setIsModalOpen(false);
-      setName('');
-      setCode('');
-      setDescription('');
-      setContactEmail('');
-      fetchDepts();
+      const { _id, ...body } = draft;
+      await adminApi.saveDepartment(body, _id);
+      showToast(t.admin.saved, 'success');
+      setDraft(null);
+      load();
     } catch (err: any) {
-      showToast(err.message || 'Failed to create department', 'error');
+      setErrors(fieldErrors(err));
+      showToast(errorMessage(err, t), 'error');
     } finally {
-      setSubmitting(false);
+      setBusy(false);
     }
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Breadcrumb */}
-      <Breadcrumb
-        items={[
-          { label: 'Municipal Administration', href: '/admin' },
-          { label: 'Departments Directory' },
-        ]}
-      />
+    <AdminShell>
+      <PageHeader title={t.admin.navDepartments} actions={!draft ? <Button onClick={() => { setErrors({}); setDraft({ ...EMPTY }); }}>{t.admin.deptNew}</Button> : undefined} />
+      {error && <Alert variant="error">{error}</Alert>}
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <h1 className="text-2xl font-bold text-civic-900 tracking-tight">
-            Municipal Departments & Dispatch Directory
-          </h1>
-          <p className="text-xs text-slate-500 mt-0.5">
-            Operational directories of Greater Hyderabad civic engineering departments, contact emails, and active grievance caseloads.
-          </p>
-        </div>
-
-        <Button variant="primary" size="sm" onClick={() => setIsModalOpen(true)}>
-          <Plus className="w-3.5 h-3.5 mr-1" />
-          <span>Register Department</span>
-        </Button>
-      </div>
-
-      {loading ? (
-        <div className="py-20 flex justify-center text-slate-400">
-          <Loader2 className="w-6 h-6 animate-spin text-civic-700" />
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {departments.map((d) => (
-            <div
-              key={d._id}
-              className="bg-white rounded-lg border border-slate-200 p-5 shadow-2xs space-y-3 flex flex-col justify-between"
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono font-bold text-[11px] px-2 py-0.5 rounded bg-civic-50 text-civic-900 border border-civic-200">
-                    {d.code}
-                  </span>
-                  <span className="text-[11px] font-mono text-slate-500">
-                    {d.assignedComplaintsCount || 0} active cases
-                  </span>
-                </div>
-
-                <h3 className="font-semibold text-slate-900 text-sm">{d.name}</h3>
-                <p className="text-xs text-slate-600 leading-relaxed">{d.description}</p>
-              </div>
-
-              <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-500 flex items-center gap-1.5 truncate">
-                <Mail className="w-3 h-3 text-slate-400 shrink-0" />
-                <span className="truncate font-mono text-slate-700">{d.contactEmail}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Register Department Modal */}
-      <Modal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        title="Register Municipal Department"
-        maxWidth="md"
-      >
-        <form onSubmit={handleCreate} className="space-y-4">
-          <Input
-            label="Department Name *"
-            placeholder="e.g., GHMC Traffic Engineering Cell"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-          />
-
-          <Input
-            label="Department Code (Uppercase) *"
-            placeholder="e.g., GHMC-TRAFFIC"
-            value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
-            required
-          />
-
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Operational Scope of Responsibility *
-            </label>
-            <textarea
-              required
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Describe maintenance responsibilities, ward jurisdiction, and equipment..."
-              className="w-full text-xs rounded border border-slate-300 p-2 text-slate-800 focus:outline-none focus:ring-1 focus:ring-civic-700"
-            />
+      {draft && (
+        <form onSubmit={save} className="rounded-lg border border-slate-200 bg-white p-4 mb-6 grid gap-3 sm:grid-cols-2" noValidate>
+          <Input label={t.admin.deptCode} value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value.toUpperCase() })} error={errors.code} disabled={!!draft._id} required />
+          <Input label={t.admin.deptName} value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} error={errors.name} required />
+          <Select label={t.admin.deptAuthority} value={draft.authority} onChange={(e) => setDraft({ ...draft, authority: e.target.value as AdminDepartment['authority'] })}>
+            {['GHMC', 'HMWSSB', 'TSSPDCL', 'OTHER'].map((a) => <option key={a} value={a}>{a}</option>)}
+          </Select>
+          <label className="flex items-center gap-2 text-sm pt-6">
+            <input type="checkbox" checked={draft.isActive} onChange={(e) => setDraft({ ...draft, isActive: e.target.checked })} />
+            {t.admin.deptActive}
+          </label>
+          <div className="sm:col-span-2">
+            <TextArea label={t.admin.deptDescription} rows={2} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} />
           </div>
-
-          <Input
-            label="Official Dispatch Email *"
-            type="email"
-            placeholder="e.g., traffic-cell@ghmc.gov.in.demo"
-            value={contactEmail}
-            onChange={(e) => setContactEmail(e.target.value)}
-            helperText="Internal simulated address used for dispatch notifications"
-            required
-          />
-
-          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setIsModalOpen(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              isLoading={submitting}
-            >
-              Confirm Registration
-            </Button>
+          <div className="sm:col-span-2 flex gap-2">
+            <Button type="submit" isLoading={busy}>{t.admin.deptSave}</Button>
+            <Button type="button" variant="ghost" onClick={() => setDraft(null)}>{t.common.cancel}</Button>
           </div>
         </form>
-      </Modal>
-    </div>
+      )}
+
+      {!error && items === null && <p className="text-slate-600">{t.common.loading}</p>}
+      {items && (
+        <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-left text-slate-600">
+              <tr>
+                <th className="px-3 py-2">{t.admin.deptCode}</th>
+                <th className="px-3 py-2">{t.admin.deptName}</th>
+                <th className="px-3 py-2">{t.admin.deptAuthority}</th>
+                <th className="px-3 py-2">{t.admin.deptActive}</th>
+                <th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((d) => (
+                <tr key={d._id} className="border-t border-slate-100">
+                  <td className="px-3 py-2 font-mono text-xs">{d.code}</td>
+                  <td className="px-3 py-2">{d.name}</td>
+                  <td className="px-3 py-2">{d.authority}</td>
+                  <td className="px-3 py-2">{d.isActive ? '✓' : '—'}</td>
+                  <td className="px-3 py-2 text-right">
+                    <Button size="sm" variant="outline" onClick={() => { setErrors({}); setDraft({ ...d }); }}>{t.admin.deptEdit}</Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </AdminShell>
   );
 };

@@ -1,153 +1,224 @@
-# 👁️ CivicEye — AI-Powered Civic Grievance & Infrastructure Intelligence Platform
+# CivicEye
 
-> **Greater Hyderabad Municipal Corporation (GHMC) & HMWSSB Infrastructure Intelligence**  
-> Built for transparent civic reporting, rapid departmental triage, automated AI classification, multi-factor severity ranking, and verified on-site proof of resolution.
+A civic grievance reporting and tracking prototype for the Greater Hyderabad region.
+Citizens report problems (potholes, garbage, drainage, water leaks, streetlights, exposed wires, damaged
+infrastructure, waterlogging) with text, photos or voice. AI helps classify and prioritise each report, and
+administrators verify, assign and resolve it. Every step is recorded and visible on a public tracking page.
 
----
+> **This is an independent prototype.** It is not run by, or connected to, GHMC, HMWSSB, TSSPDCL or any
+> government body. Reports made in CivicEye are **not** forwarded to any department. Records labelled
+> **DEMO DATA** are fictional. The priority score is a **prototype model**, not an official standard.
+> No official complaint data is imported. See [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md) for why.
 
-## 🌟 Key Highlights & Features
+## Features
 
-1. **Multilingual Grievance Intake**:
-   - Voice dictation with automated audio transcription (English, Telugu, Hindi).
-   - Photographic evidence capture with file validation (strict MIME checks, UUID rename, max 10MB).
-   - Accurate GeoJSON standard coordinates (`[longitude, latitude]`) with MongoDB `2dsphere` spatial indexing.
-2. **AI Classification & Deterministic Fallback**:
-   - Google Gemini 1.5 Flash SDK (`@google/generative-ai ^0.21.0`) with 10-second timeout and Zod schema validation.
-   - **Offline Turnkey Demo Mode**: Automatically activates a deterministic Simulated AI engine when no Gemini API key is configured.
-   - All AI assessments are clearly labeled with a prototype disclaimer (`🤖 Simulated AI Analysis - Prototype estimate`).
-3. **Transparent 4-Factor Severity Scoring**:
-   - Computes a 1–100 priority score based on:
-     - $f_1$: AI physical severity rating (40%)
-     - $f_2$: Affected population impact proxy via citizen upvotes (25%)
-     - $f_3$: Public safety & health hazard flag for drainage/water/electricity (20%)
-     - $f_4$: Unresolved duration bonus (15%) — **older unresolved complaints receive higher priority, never a penalty!**
-4. **500-Meter Geospatial Duplicate Detection**:
-   - MongoDB `$nearSphere` queries find nearby complaints within 500m in the same category.
-   - Computes Jaccard word similarity on grievance text.
-   - If a duplicate is suspected ($\ge 0.35$), complaints are linked via a shared `duplicateGroupId` without deleting or hiding any citizen's individual report.
-   - Dedicated Administrative Review panel (`/admin/duplicates`) allows administrators to confirm or separate duplicate groups.
-5. **Interactive Hyderabad Map**:
-   - Leaflet + OpenStreetMap displaying color-coded severity markers (Critical, High, Medium, Low).
-   - Real-time category and lifecycle status filters.
-6. **Public Analytics & Transparency Dashboard**:
-   - Recharts visual charts: category breakdown, lifecycle status funnel, and locality distribution across 10 Hyderabad zones.
-7. **Departmental Lifecycle & Resolution Proof**:
-   - Assign to 8 specialized departments (GHMC Roads, GHMC Drainage, TSSPDCL Electricity, HMWSSB Water, GHMC Sanitation, GHMC Street Lights, GHMC Parks, GHMC General).
-   - Before-and-after photographic evidence uploads.
-   - Complete immutable audit logging and timeline history.
-8. **1-Click Demo Authentication**:
-   - Instant Demo Citizen & Demo Administrator login buttons.
-   - Secure `httpOnly` JWT session cookies with CORS credential validation.
-
----
-
-## 🏗️ Architecture & Technology Stack
-
-| Layer | Technologies |
+| Area | What it does |
 |---|---|
-| **Frontend** | React 18, Vite, TypeScript, Tailwind CSS, Lucide Icons, Leaflet, Recharts |
-| **Backend** | Node.js, Express, TypeScript, Multer, Cookie-Parser, Zod |
-| **Database** | MongoDB & Mongoose with **GeoJSON 2dsphere indexing** + automatic In-Memory Mongo fallback |
-| **AI Engine** | Google Gemini 1.5 Flash (`@google/generative-ai`) + Deterministic Mock Classifier |
-| **Maps** | Leaflet & OpenStreetMap (Zero API key required) |
+| Reporting | Text, photo (JPG/PNG/WebP up to 10 MB), voice recording with editable transcript, map pin or GPS location, optional category |
+| AI (Gemini) | Structured analysis of text and photo, speech-to-text, text-to-speech status reading, on-request translation. Always labelled as a suggestion; failures are reported honestly |
+| Languages | English, Telugu, Hindi for the whole interface. Citizen text is never auto-translated; translation is on request |
+| Duplicates | Haversine distance + multilingual text similarity + recency. Suggestions only: the citizen can support an existing report or submit anyway; nothing is ever deleted |
+| Tracking | Unique tracking ID (`CE-HYD-YYYY-NNNNNN`), public status timeline, resolution evidence |
+| Map & analytics | Leaflet/OpenStreetMap map, charts computed from the database, filters, data-composition panel |
+| Admin console | Queue with search/filters, AI-vs-verified view, category verification, department assignment, status updates with notes, public/internal comments, evidence upload, duplicate review, department workload |
+| Data honesty | Every record has a provenance: `CITIZEN`, `DEMO` or `IMPORTED_OFFICIAL`. Public statistics default to citizen reports only |
 
----
+Stack: React 18, Vite, TypeScript, Tailwind CSS, Recharts, Leaflet (frontend); Node.js, Express, TypeScript,
+Mongoose/MongoDB, Zod (backend); Google Gemini via `@google/genai`.
 
-## 🚀 Quick Start & Setup Instructions
+## Quick start (about 10 minutes)
 
 ### Prerequisites
-- Node.js (v18+)
-- npm
 
-### 1. Installation
-Clone or navigate to the project directory and install all dependencies:
+- **Node.js 20 or newer** (developed on Node 24) and npm
+- **MongoDB**, one of:
+  - a local MongoDB server, or a free [MongoDB Atlas](https://www.mongodb.com/atlas) cluster (recommended for anything beyond a quick look), or
+  - the built-in throw-away in-memory MongoDB (`USE_MEMORY_DB=true`). The first start downloads a MongoDB binary
+    of about 600 MB; all data is lost whenever the backend restarts.
+- A **Gemini API key** is optional. Without one the app runs in a clearly labelled *simulated* demo mode.
+
+### 1. Install
+
 ```bash
-# Install backend dependencies
-cd backend
-npm install
-
-# Install frontend dependencies
-cd ../frontend
-npm install
+npm run install:all
 ```
 
-### 2. Environment Configuration
-Both backend and frontend come pre-configured with default `.env` files for immediate demo execution.
+### 2. Configure the backend
 
-**Backend `.env`**:
-```env
-PORT=4000
-NODE_ENV=development
-FRONTEND_URL=http://localhost:5173
-MONGO_URI=mongodb://127.0.0.1:27017/civiceye
-JWT_SECRET=civiceye_super_secret_jwt_key_2026_dev_mode
-GEMINI_API_KEY= # Optional! Leave empty for deterministic mock AI
-```
-
-*(Note: If no external MongoDB instance is running, CivicEye automatically boots a zero-config In-Memory MongoDB engine with full 2dsphere index and aggregation pipeline support!)*
-
-### 3. Database Seeding
-Seed the database with demo users, 8 municipal departments, and 40 realistic fictional complaints across 10 Hyderabad localities:
 ```bash
 cd backend
-npm run seed
+cp .env.example .env        # on Windows PowerShell: Copy-Item .env.example .env
 ```
 
-### 4. Running the Application
-Open two terminal windows:
+Edit `backend/.env`. The minimum for local development:
 
-**Terminal 1 (Backend API Server on port 4000):**
+```ini
+JWT_SECRET=<a long random value>          # node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+MONGO_URI=mongodb://127.0.0.1:27017/civiceye   # or your Atlas URI
+# ...or, for a throw-away database instead of MONGO_URI:
+# USE_MEMORY_DB=true
+
+ADMIN_EMAIL=you@example.com               # creates your first administrator at startup
+ADMIN_PASSWORD=<12+ character passphrase>
+
+SEED_DEMO_DATA=true                       # optional: adds clearly labelled DEMO complaints
+GEMINI_API_KEY=<your key>                 # optional; server-side only
+```
+
+The frontend works without configuration. `frontend/.env` (optional) only sets `VITE_API_URL`
+(default `http://localhost:4000`). **Never put the Gemini key in any `VITE_` variable.**
+
+### 3. Run
+
+Two terminals:
+
 ```bash
-cd backend
-npm run dev
+npm run dev:backend      # API on http://localhost:4000
+npm run dev:frontend     # app on http://localhost:5173
 ```
 
-**Terminal 2 (Frontend Client on port 5173):**
+Open <http://localhost:5173>. Log in with the `ADMIN_EMAIL` / `ADMIN_PASSWORD` you set to reach the
+**Admin Console**, or register a normal citizen account.
+
+### 4. Check that it works
+
 ```bash
-cd frontend
-npm run dev
+curl http://localhost:4000/api/health      # database "connected", AI configuration
+cd backend && npm run ai:smoke             # live check of every Gemini feature (key is never printed)
+npm run test:backend && npm run test:frontend
 ```
 
-Visit **http://localhost:5173** in your browser.
+## First administrator
 
----
+There are no built-in or demo credentials. Create the first admin by either:
 
-## 🔑 Demo Login Credentials
+- setting `ADMIN_EMAIL` and `ADMIN_PASSWORD` in `backend/.env` (created at startup if it does not exist; an
+  existing account is never overwritten), or
+- running, against a real MongoDB (not the in-memory one):
 
-The login page (`/login`) includes **1-Click Instant Demo Login** buttons:
+  ```bash
+  cd backend
+  ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a-long-passphrase' npm run create-admin
+  ```
 
-| Role | Email | Password | Access Capabilities |
-|---|---|---|---|
-| **Demo Citizen** | `citizen@civiceye.demo` | `demo1234` | Report grievances, voice dictation, view own reports, upvote |
-| **Demo Administrator** | `admin@civiceye.demo` | `admin1234` | Full Command Dashboard, dispatch departments, update status, upload resolution proof, review duplicate groups |
+Registration always creates citizens. The admin password must be at least 12 characters.
 
----
+## Demo data
 
-## 🧪 Running Automated Tests
+`SEED_DEMO_DATA=true` (or `npm run seed` against a real database) adds 14 **fictional** complaints:
 
-### Backend Unit & Integration Tests (16 tests across 4 test suites):
-```bash
-cd backend
-npm test
+- provenance `DEMO`, tracking IDs `CE-DEMO-000001…`, shown with a **DEMO DATA** badge everywhere
+- approximate locations (hollow rings on the map), no photos, a duplicate pair for demonstrations
+- never counted in the default statistics: demo records appear only when someone explicitly includes them
+
+A walkthrough that uses this data is in [docs/DEMO.md](docs/DEMO.md).
+
+## Environment variables
+
+All variables live in `backend/.env` (see [backend/.env.example](backend/.env.example) for comments).
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `4000` | API port |
+| `NODE_ENV` | `development` | `development`, `production`, `test` |
+| `FRONTEND_URL` | `http://localhost:5173` | The only origin allowed to call the API (CORS) |
+| `TRUST_PROXY` | `false` | Set `true` behind a reverse proxy so rate limits see real client IPs |
+| `MONGO_URI` | – | MongoDB connection string. Required unless `USE_MEMORY_DB=true` |
+| `USE_MEMORY_DB` | `false` | Throw-away in-memory MongoDB. Refused in production |
+| `JWT_SECRET` | – (required) | Session signing key. In production it must be 32+ characters and not a known default |
+| `JWT_EXPIRES_IN` | `8h` | Session lifetime |
+| `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` | – | First administrator, created at startup if absent (password 12+ chars) |
+| `SEED_DEMO_DATA` | `false` | Add labelled DEMO complaints at startup (once) |
+| `GEMINI_API_KEY` | – | Enables real AI. Empty = simulated demo mode |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Analysis and translation model |
+| `GEMINI_TRANSCRIBE_MODEL` | `gemini-3.5-transcribe` | Speech-to-text |
+| `GEMINI_TTS_MODEL` / `GEMINI_TTS_VOICE` | `gemini-3.8-flash-lite-tts` / `Kore` | Text-to-speech |
+| `GEMINI_TIMEOUT_MS` | `30000` | Per-call timeout (one retry on timeouts and 5xx) |
+| `AI_DEMO_FALLBACK` | `false` | If a Gemini call fails: `false` = save the report with `ai.status "failed"`; `true` = use the labelled keyword simulation |
+| `SCORING_WEIGHT_SAFETY/AFFECTED/EVIDENCE/DURATION` | `0.35/0.25/0.20/0.20` | Prototype score weights (normalised to sum to 1) |
+| `SCORING_DURATION_SATURATION_DAYS` | `30` | Days until the "time open" factor reaches its maximum |
+| `DUPLICATE_RADIUS_METRES` / `_LOOKBACK_DAYS` / `_SCORE_THRESHOLD` | `200` / `30` / `0.3` | Duplicate detection tuning |
+| `RATE_LIMIT_GENERAL_MAX` / `_AUTH_MAX` / `_SUBMIT_MAX` / `_AI_MAX` | `300` / `10` / `20` / `30` | Requests per window (15 min, 15 min, 1 h, 1 h) |
+| `MAX_UPLOAD_BYTES` | `10485760` | Upload size limit (10 MB) |
+
+Model names were verified against the live API on 21 Nov 2026. If Google retires one, change the variable and run
+`npm run ai:smoke`.
+
+## Scripts
+
+| Command (repo root) | What it does |
+|---|---|
+| `npm run install:all` | Install backend and frontend dependencies |
+| `npm run dev:backend` / `dev:frontend` | Start the dev servers |
+| `npm run test:backend` / `test:frontend` | Run the test suites |
+| `npm run seed` | Add DEMO data to a real MongoDB |
+| `cd backend && npm run create-admin` | Create the first administrator |
+| `cd backend && npm run ai:smoke` | Live check of all Gemini features |
+| `cd backend && npm run import:aggregate -- --csv f.csv --meta m.json [--approve]` | Import an aggregate official dataset (hidden until approved; see [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md)) |
+| `cd backend && npm run build && npm start` | Compile and run the API for production |
+| `cd frontend && npm run build` | Typecheck and build the frontend into `frontend/dist` |
+
+## Project structure
+
 ```
-Tests cover:
-- `severityService.test.ts`: 4-factor formula, duration bonus verification, boundaries clamp.
-- `duplicateService.test.ts`: Jaccard text similarity tokenization and threshold matching.
-- `aiService.test.ts`: Deterministic classification, category matching, simulated labels, language hints.
-- `apiRoutes.test.ts`: Health check, demo auth cookies, static-before-dynamic route ordering (`/map`, `/analytics/summary` before `/:id`).
-
-### Frontend Unit Tests:
-```bash
-cd frontend
-npm test
+backend/src
+  config/       env validation, database connection
+  models/       User, Complaint, ComplaintUpdate, DuplicateGroup, Support, Department, Imported*
+  services/     AI (Gemini client, analysis, transcription, speech), scoring, duplicates, analytics, seeding
+  controllers/  request handlers      routes/  Express routers (mounted under /api/v1)
+  middleware/   auth, rate limiting, uploads (content-checked), error handling
+  scripts/      create-admin, seed, ai:smoke, import:aggregate
+  __tests__/    Jest + Supertest (in-memory MongoDB)
+frontend/src
+  i18n/         English, Telugu, Hindi dictionaries (type-checked for completeness)
+  pages/ components/ api/ contexts/ routes/ utils/
+docs/           ARCHITECTURE, API, openapi.yaml, DATA_SOURCES, DEMO
 ```
-Tests cover:
-- `severityColor.test.ts`: Severity band mapping and styling classes.
-- `i18n.test.ts`: English, Telugu, and Hindi translations dictionary.
 
----
+## Security notes
 
-## 🛡️ Security & Compliance Notes
-- All uploaded files are sanitized: executable extensions (`.exe`, `.sh`, `.php`, etc.) are blocked, MIME types are strictly validated, and original filenames are replaced with cryptographic UUIDs.
-- `GEMINI_API_KEY` is strictly confined to the backend server and is never exposed in frontend code.
-- **Academic Disclaimer**: *CivicEye is a simulated civic infrastructure management prototype. No demo complaints or notifications are submitted to real municipal government authorities.*
+- The Gemini key stays on the server. It is never sent to the browser or logged.
+- Sessions are JWTs in `HttpOnly`, `SameSite=Lax` cookies (8 h). Roles are re-read from the database on every request.
+- Passwords are hashed with bcrypt (cost 12). Login and registration are rate limited.
+- Uploads are validated by content (magic bytes), renamed, and size limited. Voice recordings are private (only the
+  reporter and admins can play them).
+- Public endpoints never return reporter identity. Admin routes require the `admin` role.
+- Production checklist: unique `JWT_SECRET` (32+ chars), a real `MONGO_URI`, `NODE_ENV=production` (secure cookies),
+  `FRONTEND_URL` set to the real origin, `TRUST_PROXY=true` behind a proxy, HTTPS, and the frontend and API on the same
+  site (the session cookie is `SameSite=Lax`).
+
+## Known limitations
+
+- AI analysis and the score are prototype-quality. The AI's explanations are in English by design.
+- Analysis with a photo can take around 20 seconds. Gemini availability and latency are outside this project's control.
+- Telugu and Hindi translations are machine-assisted drafts and need review by native speakers.
+- No email/SMS notifications, no password reset flow, no push updates (the tracking page is pull-based).
+- Uploaded files are stored on local disk (`backend/uploads`). Use object storage for a real deployment.
+- Admin names are recorded in the internal history; the public timeline never shows them.
+- `npm audit` reports 2 moderate `react-router` advisories that affect server-side rendering only (not used here).
+- Tested in the Chromium-based built-in browser at desktop and phone width; not tested on other browsers, with a
+  screen reader, or with a real microphone.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| Backend exits with `MONGO_URI is not set` | Set `MONGO_URI`, or `USE_MEMORY_DB=true` for a throw-away database |
+| First start with `USE_MEMORY_DB=true` is slow | It downloads a ~600 MB MongoDB binary once |
+| Sessions and data vanish after the backend restarts | Expected with `USE_MEMORY_DB=true` (and the dev server restarts when files change) |
+| Report says "AI analysis was not available" | `GEMINI_API_KEY` is wrong, the model name was retired, or the call timed out. Run `npm run ai:smoke` |
+| AI text says "Simulated" | No `GEMINI_API_KEY`, or `AI_DEMO_FALLBACK=true` after a failure. This is the labelled demo mode |
+| "Cannot reach the server" in the UI | Backend not running, or `VITE_API_URL` points elsewhere |
+| 429 "Too many requests" | Rate limit hit (login: 10 attempts per 15 min per email). Wait, or raise the limit in `.env` for testing |
+| Cannot log in as admin | `ADMIN_EMAIL`/`ADMIN_PASSWORD` must be set *before* the backend starts, and the account is not re-created if the email already exists |
+
+## Documentation
+
+- [docs/API.md](docs/API.md) and [docs/openapi.yaml](docs/openapi.yaml): API reference
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design as built
+- [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md): official data research
+- [docs/DEMO.md](docs/DEMO.md): demonstration script
+
+## License
+
+MIT (see `package.json`). OpenStreetMap data © OpenStreetMap contributors.

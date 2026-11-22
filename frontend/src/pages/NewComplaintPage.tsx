@@ -306,17 +306,6 @@ export const NewComplaintPage: React.FC = () => {
 
         {step === 2 && (
           <>
-            <Select label={t.report.areaLabel} value={area} onChange={(e) => setArea(e.target.value)}>
-              {AREAS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </Select>
-            <Input
-              label={`${t.report.addressLabel} (${t.common.optional})`}
-              helperText={t.report.addressHelp}
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              maxLength={200}
-            />
-
             <div className="space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="text-sm font-medium">{t.report.locationLabel}</span>
@@ -339,6 +328,18 @@ export const NewComplaintPage: React.FC = () => {
               </p>
               {errors.location && <p className="text-sm text-rose-700" role="alert">{errors.location}</p>}
             </div>
+
+            <Select label={t.report.areaLabel} helperText={t.report.areaHelp} value={area} onChange={(e) => setArea(e.target.value)}>
+              {AREAS.map((a) => <option key={a} value={a}>{a}</option>)}
+            </Select>
+            <Input
+              label={`${t.report.addressLabel} (${t.common.optional})`}
+              helperText={t.report.addressHelp}
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              maxLength={200}
+            />
+
 
             <div className="space-y-2">
               <label htmlFor="photo" className="block text-sm font-medium">
