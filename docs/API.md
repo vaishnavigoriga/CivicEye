@@ -34,7 +34,7 @@ Base URL (development): `http://localhost:4000/api/v1`. A machine-readable descr
 **Authentication.** `POST /auth/login` or `/auth/register` sets an `HttpOnly`, `SameSite=Lax` cookie named `token`
 (8 hours). There is no bearer-token mode and the token is never in a response body. Roles: `citizen`, `admin`.
 
-**Rate limits** (per window): general 300 / 15 min per IP; login and register 10 / 15 min per IP + email; submitting
+**Rate limits** (per window): general 300 / 15 min per IP; login and register 10 / 15 min per IP + email; new accounts 10 / h per IP; submitting
 a report 20 / h per user; AI-backed endpoints (`check-duplicates`, `transcribe`, `speak`, `translate`) 30 / h per
 user (IP when anonymous). Limits are configurable (see README). Responses include `RateLimit-*` headers.
 

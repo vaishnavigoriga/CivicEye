@@ -3,6 +3,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
+import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
 import { ENV } from './config/env';
@@ -26,7 +27,23 @@ export const app = express();
 if (ENV.TRUST_PROXY) app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'same-site' } }));
+// The site (frontend + API) is served from one origin. The CSP allows exactly what the app loads:
+// map tiles (OpenStreetMap), Google Fonts, and blob: URLs for photo previews and audio playback.
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: 'same-site' },
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'img-src': ["'self'", 'data:', 'blob:', 'https://*.tile.openstreetmap.org'],
+        'media-src': ["'self'", 'blob:'],
+        'connect-src': ["'self'"],
+        // Only force https in production; it would break plain-http local runs.
+        'upgrade-insecure-requests': ENV.NODE_ENV === 'production' ? [] : null,
+      },
+    },
+  }),
+);
 
 // Strict CORS: only configured frontend origins (FRONTEND_URL, comma-separated) may make credentialed requests.
 // In development only, any localhost / 127.0.0.1 port is also accepted, because Vite moves to the next free
@@ -78,6 +95,19 @@ api.use('/admin', adminRoutes);
 api.use('/media', mediaRoutes);
 api.get('/data-sources', dataSources);
 app.use('/api/v1', generalLimiter, api);
+
+// Single-service deployment: serve the built frontend (frontend/dist) and fall back to index.html for client-side
+// routes. Enabled by default in production, or with SERVE_FRONTEND=true. API and upload paths never fall through.
+const frontendDist = path.resolve(__dirname, '../../frontend/dist');
+const serveFrontend = ENV.SERVE_FRONTEND ?? ENV.NODE_ENV === 'production';
+if (serveFrontend) {
+  if (fs.existsSync(path.join(frontendDist, 'index.html'))) {
+    app.use(express.static(frontendDist, { index: false, maxAge: '1h' }));
+    app.get(/^\/(?!api\/|uploads\/).*/, (_req, res) => res.sendFile(path.join(frontendDist, 'index.html')));
+  } else {
+    logger.warn(`SERVE_FRONTEND is on but ${frontendDist} has no build. Run "npm run build:frontend" first.`);
+  }
+}
 
 app.use(notFoundHandler);
 app.use(errorHandler);

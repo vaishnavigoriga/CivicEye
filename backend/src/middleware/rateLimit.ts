@@ -20,6 +20,8 @@ const MINUTE = 60 * 1000;
 export const generalLimiter = createLimiter(15 * MINUTE, ENV.RATE_LIMIT_GENERAL_MAX);
 /** Login / register: keyed by IP (+ email when present) to slow password guessing. */
 export const authLimiter = createLimiter(15 * MINUTE, ENV.RATE_LIMIT_AUTH_MAX, (req) => `${req.ip}|${String(req.body?.email ?? '').toLowerCase()}`);
+/** New accounts per IP per hour, so a public demo cannot be farmed for AI quota by varying the email. */
+export const registerLimiter = createLimiter(60 * MINUTE, ENV.RATE_LIMIT_REGISTER_MAX, (req) => req.ip);
 export const submitLimiter = createLimiter(60 * MINUTE, ENV.RATE_LIMIT_SUBMIT_MAX, (req) => req.user?.id ?? req.ip);
 /** Anything that calls the AI service (transcription, duplicate preview with text, analysis). */
 export const aiLimiter = createLimiter(60 * MINUTE, ENV.RATE_LIMIT_AI_MAX, (req) => req.user?.id ?? req.ip);

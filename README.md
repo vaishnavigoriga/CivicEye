@@ -198,7 +198,8 @@ All variables live in `backend/.env` (see [backend/.env.example](backend/.env.ex
 | `SCORING_WEIGHT_SAFETY/AFFECTED/EVIDENCE/DURATION` | `0.35/0.25/0.20/0.20` | Prototype score weights (normalised to sum to 1) |
 | `SCORING_DURATION_SATURATION_DAYS` | `30` | Days until the "time open" factor reaches its maximum |
 | `DUPLICATE_RADIUS_METRES` / `_LOOKBACK_DAYS` / `_SCORE_THRESHOLD` | `200` / `30` / `0.3` | Duplicate detection tuning |
-| `RATE_LIMIT_GENERAL_MAX` / `_AUTH_MAX` / `_SUBMIT_MAX` / `_AI_MAX` | `300` / `10` / `20` / `30` | Requests per window (15 min, 15 min, 1 h, 1 h) |
+| `RATE_LIMIT_GENERAL_MAX` / `_AUTH_MAX` / `_REGISTER_MAX` / `_SUBMIT_MAX` / `_AI_MAX` | `300` / `10` / `10` / `20` / `30` | Requests per window (15 min, 15 min, 1 h per IP, 1 h, 1 h) |
+| `SERVE_FRONTEND` | on in production | Serve `frontend/dist` from the API server (single-origin deployment) |
 | `MAX_UPLOAD_BYTES` | `10485760` | Upload size limit (10 MB) |
 
 Model names were verified against the live API on 21 Nov 2026. If Google retires one, change the variable and run
@@ -278,6 +279,7 @@ docs/           ARCHITECTURE, API, openapi.yaml, DATA_SOURCES, DEMO
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design as built
 - [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md): official data research
 - [docs/DEMO.md](docs/DEMO.md): demonstration script
+- [docs/DEPLOY.md](docs/DEPLOY.md): free deployment with MongoDB Atlas + Render
 
 ## License
 

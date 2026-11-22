@@ -13,6 +13,8 @@ const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   FRONTEND_URL: z.string().default('http://localhost:5173'),
   TRUST_PROXY: bool('false'),
+  /** Serve frontend/dist from this server. Unset = on in production, off otherwise. */
+  SERVE_FRONTEND: z.string().default('').transform((v) => (v === '' ? undefined : v.toLowerCase() === 'true')),
 
   MONGO_URI: z.string().optional().default(''),
   /** Explicit opt-in to a throw-away in-memory MongoDB (development and tests only). */
@@ -57,6 +59,7 @@ const envSchema = z.object({
   // Rate limits (requests per window)
   RATE_LIMIT_GENERAL_MAX: num('300'),
   RATE_LIMIT_AUTH_MAX: num('10'),
+  RATE_LIMIT_REGISTER_MAX: num('10'),
   RATE_LIMIT_SUBMIT_MAX: num('20'),
   RATE_LIMIT_AI_MAX: num('30'),
 

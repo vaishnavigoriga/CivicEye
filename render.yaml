@@ -1,0 +1,36 @@
+# Render Blueprint: one free web service that builds and serves BOTH the API and the frontend (same origin,
+# which the session cookie needs). Secrets marked `sync: false` are entered once in the Render dashboard.
+# Step-by-step guide: docs/DEPLOY.md
+services:
+  - type: web
+    name: civiceye
+    runtime: node
+    plan: free
+    # devDependencies are required to compile TypeScript and build the frontend.
+    buildCommand: cd backend && npm install --include=dev && npm run build && cd ../frontend && npm install --include=dev && npm run build
+    startCommand: cd backend && npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      - key: SEED_DEMO_DATA
+        value: "true"
+      - key: RATE_LIMIT_AI_MAX
+        value: "10"
+      - key: RATE_LIMIT_REGISTER_MAX
+        value: "5"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGO_URI
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
